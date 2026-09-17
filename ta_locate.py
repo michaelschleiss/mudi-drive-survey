@@ -25,7 +25,7 @@ TA_M = 78.12          # metres per LTE TA step (15 kHz SCS); NR 30 kHz SCS would
 OBS_CSV = os.path.expanduser("~/ta-observations.csv")
 FIELDS = ["ts", "lat", "lon", "cell", "band", "pci", "ta", "rsrp"]
 
-state = {"obs": [], "towers": {}, "truth": [], "source": "", "status": "starting"}
+state = {"obs": [], "towers": {}, "truth": [], "source": "", "status": "starting", "pos": None, "browser_pos": None}
 lock = threading.Lock()
 
 
@@ -158,6 +158,7 @@ def sim_feed(speed):
         tw, rsrp, d = best
         nlos = abs(random.gauss(0, 25)) + (60 if random.random() < 0.1 else 0)
         ta = int((d + nlos) // TA_M)
+        state["pos"] = {"lat": lat, "lon": lon, "src": "sim"}
         add_obs({"ts": round(ts + t, 1), "lat": lat, "lon": lon, "cell": tw["cell"], "band": tw["band"], "pci": tw["pci"], "ta": ta, "rsrp": round(rsrp, 1)})
         t += 2.0
         time.sleep(2.0 / speed)
@@ -322,7 +323,12 @@ def diag_feed(host, port=2500):
                     q = [x.strip('"') for x in ln.split(":", 1)[1].split(",")]
                     try: band = "B" + q[7]; pci = float(q[5]); rsrp = float(q[11]); cell = f"{band}/{int(pci)}"
                     except Exception: pass
-            st = f"TA {ta['abs']} ({ta['rach']} RACH, {ta['cmds']} TA cmds) · cell {cell} · " + ("GPS ok" if lat is not None else "no GPS fix")
+            src = "modem"
+            if lat is None and state["browser_pos"] and time.time() - state["browser_pos"]["t"] < 15:
+                lat, lon, src = state["browser_pos"]["lat"], state["browser_pos"]["lon"], "browser"
+            if lat is not None:
+                state["pos"] = {"lat": lat, "lon": lon, "src": src}
+            st = f"TA {ta['abs']} ({ta['rach']} RACH, {ta['cmds']} TA cmds) · cell {cell} · " + (f"GPS {src}" if lat is not None else "no GPS fix (modem); allow browser location as fallback")
             state["status"] = st
             if ta["abs"] is not None and lat is not None and cell:
                 add_obs({"ts": round(time.time(), 1), "lat": lat, "lon": lon, "cell": cell, "band": band, "pci": pci, "ta": ta["abs"], "rsrp": rsrp})
@@ -372,7 +378,8 @@ HTML = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
 <style>
  html,body{margin:0;height:100%;background:#07090c;color:#dfe6ea;font:14px "IBM Plex Sans",system-ui,sans-serif}
- #map{position:absolute;inset:0;filter:saturate(.6)}
+ #map{position:absolute;inset:0}
+ .dark-tiles{filter:invert(1) hue-rotate(180deg) brightness(.85) saturate(.45) contrast(.95)}
  .leaflet-container{background:#07090c}
  .card{position:absolute;z-index:1000;background:#0d1117ee;border:1px solid #1f2933;border-radius:12px;padding:12px 14px;backdrop-filter:blur(6px)}
  #hud{top:12px;left:12px;width:340px}
@@ -403,11 +410,11 @@ HTML = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 <div id="towers" class="card"><b>Towers</b> <span class="dim">(click to zoom)</span><div id="tl"></div></div>
 <script>
 const map=L.map('map',{zoomControl:false}).setView([48.137,11.575],14); L.control.zoom({position:'bottomright'}).addTo(map); L.control.scale({imperial:false}).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap © CARTO'}).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',{maxZoom:19,pane:'shadowPane'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap',className:'dark-tiles'}).addTo(map);
 const ringL=L.layerGroup().addTo(map), pathL=L.layerGroup().addTo(map), towL=L.layerGroup().addTo(map), truthL=L.layerGroup().addTo(map);
 const HUES=[200,150,30,280,330,90]; const hue={}; let nh=0; function H(c){ if(!(c in hue))hue[c]=HUES[nh++%HUES.length]; return hue[c]; }
-let live=true, upto=null, showRings=true, showTrail=true, playing=false, fitted=false, timer=null;
+let live=true, upto=null, showRings=true, showTrail=true, playing=false, fitted=false, timer=null, me=null;
+if(navigator.geolocation) navigator.geolocation.watchPosition(p=>fetch('/api/pos',{method:'POST',body:JSON.stringify({lat:p.coords.latitude,lon:p.coords.longitude})}),null,{enableHighAccuracy:true});
 function ellipse(lat,lon,a,b,deg,color){ const pts=[]; const cl=Math.cos(lat*Math.PI/180); for(let i=0;i<=48;i++){const t=i/48*2*Math.PI; const x=a*Math.cos(t), y=b*Math.sin(t); const th=deg*Math.PI/180; const e=x*Math.cos(th)-y*Math.sin(th), n=x*Math.sin(th)+y*Math.cos(th); pts.push([lat+n/111320, lon+e/(111320*cl)]);} return L.polygon(pts,{color,weight:1.5,fillColor:color,fillOpacity:.12,dashArray:'4 4'}); }
 async function tick(){
  const st=await (await fetch('/api/state'+(upto!=null?'?upto='+upto:''))).json();
@@ -422,6 +429,7 @@ async function tick(){
      const r=o.ta*78.12+39; ringL.addLayer(L.circle([o.lat,o.lon],{radius:r,color:c,weight:i===N-1?2:1,opacity:op,fill:false}));
      if(i===N-1){ ringL.addLayer(L.circle([o.lat,o.lon],{radius:r-39,color:c,weight:1,opacity:.5,fill:false,dashArray:'2 6'})); ringL.addLayer(L.circle([o.lat,o.lon],{radius:r+39,color:c,weight:1,opacity:.5,fill:false,dashArray:'2 6'})); } } }
    if(!fitted){map.fitBounds(L.latLngBounds(obs.map(o=>[o.lat,o.lon])).pad(.3)); fitted=true;} }
+ if(st.pos){ if(!me){ me=L.circleMarker([st.pos.lat,st.pos.lon],{radius:7,color:'#fff',weight:2,fillColor:'#38bdf8',fillOpacity:1}).bindTooltip('you ('+st.pos.src+')').addTo(map); if(!fitted){map.setView([st.pos.lat,st.pos.lon],15);fitted=true;} } else me.setLatLng([st.pos.lat,st.pos.lon]); }
  (st.truth||[]).forEach(t=>truthL.addLayer(L.marker([t.lat,t.lon],{icon:L.divIcon({className:'',html:`<div style="color:#fff;font-size:18px;text-shadow:0 0 6px #000">✛</div>`})}).bindTooltip('true tower '+t.cell)));
  const tl=document.getElementById('tl'); tl.innerHTML='';
  Object.entries(st.towers).forEach(([cell,t])=>{ const c=`hsl(${H(cell)},80%,60%)`;
@@ -449,6 +457,16 @@ setInterval(()=>{ if(live) tick(); },2000); tick();
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0); raw = self.rfile.read(n) if n else b""
+        if self.path == "/api/pos":
+            try:
+                q = json.loads(raw); state["browser_pos"] = {"lat": float(q["lat"]), "lon": float(q["lon"]), "t": time.time()}
+            except Exception:
+                pass
+        body = b'{"ok":true}'
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
     def do_GET(self):
         if self.path.startswith("/api/state"):
             upto = None
@@ -459,7 +477,7 @@ class H(BaseHTTPRequestHandler):
                 obs = state["obs"] if upto is None else state["obs"][:upto]
                 towers = state["towers"] if upto is None else rebuild(upto)
                 body = json.dumps({"obs": obs[-600:], "n_total": len(state["obs"]), "towers": towers, "truth": state["truth"],
-                                   "source": state["source"], "status": state["status"]}).encode()
+                                   "source": state["source"], "status": state["status"], "pos": state["pos"]}).encode()
             ct = "application/json"
         else:
             body = HTML.encode(); ct = "text/html; charset=utf-8"
