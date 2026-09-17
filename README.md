@@ -3,7 +3,6 @@
 Find the spot with the fastest cellular **upload** using a GL.iNet Mudi 7 (GL-E5800, Quectel RG650V) and a laptop, while driving.
 No phone or extra hardware needed: the modem's own GNSS provides the position.
 
-![panel](docs/panel.png)
 
 ## What it does
 
