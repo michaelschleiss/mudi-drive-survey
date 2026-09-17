@@ -90,3 +90,10 @@ LTE MAC DL Transport Block carries the Timing Advance Command control elements t
 (`TA += cmd − 31`). A re-registration is forced at start so an absolute TA arrives within seconds; every
 handover produces a fresh one. Verified live: stationary, the modem reported TA 11 (≈ 900 m to the serving
 mast) and a steady stream of "no change" TA commands. Requires key-based ssh to the Mudi; no extra packages.
+
+### Position from the laptop itself
+
+`swift laptop_location.swift` feeds macOS Location Services (Wi-Fi/cell based, no GPS chip; works in built-up areas
+where Apple knows the access points) to both tools every 2 s. macOS must allow Location Services for the terminal app
+that runs it: System Settings → Privacy & Security → Location Services → enable your terminal (e.g. Ghostty, Terminal).
+A phone on the Mudi Wi-Fi with the page open is more accurate on the road.
