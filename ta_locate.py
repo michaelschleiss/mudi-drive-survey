@@ -312,7 +312,9 @@ def diag_feed(host, port=2500):
 
     def sampler():   # GPS + serving cell every 2 s → one observation per sample once TA is absolute
         while True:
-            out = sh(ssh + ["timeout 4 atcmd 'AT+QGPSLOC=2'; timeout 4 atcmd 'AT+QENG=\"servingcell\"'"], timeout=14)
+            out = sh(ssh + ["timeout 4 atcmd 'AT+QGPS?'; timeout 4 atcmd 'AT+QGPSLOC=2'; timeout 4 atcmd 'AT+QENG=\"servingcell\"'"], timeout=16)
+            if "+QGPS: 0" in out:
+                sh(ssh + ["timeout 4 atcmd 'AT+QGPS=1'"], timeout=10)
             lat = lon = None; cell = band = None; pci = rsrp = None
             for ln in out.splitlines():
                 if ln.startswith("+QGPSLOC:"):
@@ -324,7 +326,7 @@ def diag_feed(host, port=2500):
                     try: band = "B" + q[7]; pci = float(q[5]); rsrp = float(q[11]); cell = f"{band}/{int(pci)}"
                     except Exception: pass
             src = "modem"
-            if lat is None and state["browser_pos"] and time.time() - state["browser_pos"]["t"] < 15:
+            if lat is None and state["browser_pos"] and time.time() - state["browser_pos"]["t"] < 120:
                 lat, lon, src = state["browser_pos"]["lat"], state["browser_pos"]["lon"], "browser"
             if lat is not None:
                 state["pos"] = {"lat": lat, "lon": lon, "src": src}
@@ -414,7 +416,9 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,att
 const ringL=L.layerGroup().addTo(map), pathL=L.layerGroup().addTo(map), towL=L.layerGroup().addTo(map), truthL=L.layerGroup().addTo(map);
 const HUES=[200,150,30,280,330,90]; const hue={}; let nh=0; function H(c){ if(!(c in hue))hue[c]=HUES[nh++%HUES.length]; return hue[c]; }
 let live=true, upto=null, showRings=true, showTrail=true, playing=false, fitted=false, timer=null, me=null;
-if(navigator.geolocation) navigator.geolocation.watchPosition(p=>fetch('/api/pos',{method:'POST',body:JSON.stringify({lat:p.coords.latitude,lon:p.coords.longitude})}),null,{enableHighAccuracy:true});
+let lastPos=null; const postPos=()=>{ if(lastPos) fetch('/api/pos',{method:'POST',body:JSON.stringify(lastPos)}); };
+if(navigator.geolocation) navigator.geolocation.watchPosition(p=>{lastPos={lat:p.coords.latitude,lon:p.coords.longitude};postPos();},null,{enableHighAccuracy:true,maximumAge:1000});
+setInterval(postPos,4000);
 function ellipse(lat,lon,a,b,deg,color){ const pts=[]; const cl=Math.cos(lat*Math.PI/180); for(let i=0;i<=48;i++){const t=i/48*2*Math.PI; const x=a*Math.cos(t), y=b*Math.sin(t); const th=deg*Math.PI/180; const e=x*Math.cos(th)-y*Math.sin(th), n=x*Math.sin(th)+y*Math.cos(th); pts.push([lat+n/111320, lon+e/(111320*cl)]);} return L.polygon(pts,{color,weight:1.5,fillColor:color,fillOpacity:.12,dashArray:'4 4'}); }
 async function tick(){
  const st=await (await fetch('/api/state'+(upto!=null?'?upto='+upto:''))).json();

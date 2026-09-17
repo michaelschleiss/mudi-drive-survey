@@ -289,10 +289,12 @@ def poller():
         t0 = time.time()
         if state["bandtest"]["running"] or state["scan"]["running"]:
             time.sleep(2); continue
-        out = router(['AT+QENG="servingcell"', "AT+QCAINFO", 'AT+QENG="neighbourcell"', "AT+QGPSLOC=2"])
+        out = router(['AT+QENG="servingcell"', "AT+QCAINFO", 'AT+QENG="neighbourcell"', "AT+QGPS?", "AT+QGPSLOC=2"])
+        if "+QGPS: 0" in out:
+            router(["AT+QGPS=1"])   # something (e.g. a re-registration) switched GNSS off: turn it back on
         d = parse_modem(out)
         rate, prev = passive_rate(args.iface, prev)
-        if d["lat"] is None and state["browser_pos"] and time.time() - state["browser_pos"]["t"] < 15:
+        if d["lat"] is None and state["browser_pos"] and time.time() - state["browser_pos"]["t"] < 120:
             bp = state["browser_pos"]
             d.update(lat=bp["lat"], lon=bp["lon"], speed_kmh=bp.get("speed_kmh"), gps_src="browser")
         note = ""
@@ -424,7 +426,8 @@ document.getElementById('scan').onclick=()=>{if(confirm('Full band sweep: the Mu
 document.getElementById('center').onclick=()=>{follow=true;document.getElementById('follow').classList.add('on');if(me)map.setView(me.getLatLng(),17);};
 document.getElementById('color').onclick=e=>{colorBy=colorBy==='ul'?'sinr':'ul';e.target.textContent='color: '+(colorBy==='ul'?'upload':'SINR');layer.clearLayers();drawn=0;};
 document.getElementById('geo').onclick=e=>{ if(geoWatch!=null){navigator.geolocation.clearWatch(geoWatch);geoWatch=null;e.target.classList.remove('on');return;}
-  geoWatch=navigator.geolocation.watchPosition(p=>fetch('/api/pos',{method:'POST',body:JSON.stringify({lat:p.coords.latitude,lon:p.coords.longitude,speed_kmh:p.coords.speed==null?null:p.coords.speed*3.6})}),null,{enableHighAccuracy:true}); e.target.classList.add('on'); };
+  geoWatch=navigator.geolocation.watchPosition(p=>{window.lastPos={lat:p.coords.latitude,lon:p.coords.longitude,speed_kmh:p.coords.speed==null?null:p.coords.speed*3.6};fetch('/api/pos',{method:'POST',body:JSON.stringify(window.lastPos)});},null,{enableHighAccuracy:true,maximumAge:1000}); e.target.classList.add('on'); };
+setInterval(()=>{ if(window.lastPos) fetch('/api/pos',{method:'POST',body:JSON.stringify(window.lastPos)}); },4000);
 setInterval(tick,2000); tick(); if(navigator.geolocation) document.getElementById('geo').click();
 </script></body></html>
 """
