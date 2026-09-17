@@ -78,7 +78,11 @@ python3 ta_locate.py --diag                    # EXPERIMENTAL: TA from the modem
 Open http://localhost:8766. On the simulator the fit lands within 15–65 m of the true masts after a couple of
 minutes of driving.
 
-The AT interface of the RG650V does not expose TA, so the real feeder reads Qualcomm diag logs over ssh
-(`socat - /dev/diag` on the Mudi). That feeder is a skeleton: HDLC framing and the log-mask command are
-implemented, the TA field offset inside log 0xB063 is a placeholder to be confirmed against the raw capture it
-writes to `~/ta-diag-raw.bin`. RSRP-centroid estimates remain available in `mudi_survey.py` as the fallback.
+The AT interface of the RG650V does not expose TA, so the live feeder uses the modem's Qualcomm diag stream:
+the Mudi's own `diag-router` is restarted for the session with `-s <laptop>:2500` so it streams to the laptop
+(the stock daemon is restored on exit). Two log packets are enabled and decoded (layouts from SCAT /
+MobileInsight): 0xB062 LTE MAC RACH Attempt gives the absolute TA from the random-access response, and 0xB063
+LTE MAC DL Transport Block carries the Timing Advance Command control elements that update it
+(`TA += cmd − 31`). A re-registration is forced at start so an absolute TA arrives within seconds; every
+handover produces a fresh one. Verified live: stationary, the modem reported TA 11 (≈ 900 m to the serving
+mast) and a steady stream of "no change" TA commands. Requires key-based ssh to the Mudi; no extra packages.

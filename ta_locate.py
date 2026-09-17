@@ -9,7 +9,7 @@ Collect a few dozen of those along a drive and the annuli intersect at the mast.
 Inputs (pick one):
   --sim                 synthetic drive past three towers (TA quantised + NLOS bias), for demos/tests
   --replay FILE.csv     replay a recorded drive (ts,lat,lon,cell,band,pci,ta,rsrp), at --speed x real time
-  --diag HOST           EXPERIMENTAL: read TA from the modem's Qualcomm diag port over ssh (see diag_feed())
+  --diag [HOST]         read TA live from the modem via its diag-router streamed over TCP (default root@192.168.8.1)
 
 Output: live visualisation at http://localhost:8766, and every observation appended to ~/ta-observations.csv.
 
@@ -27,6 +27,13 @@ FIELDS = ["ts", "lat", "lon", "cell", "band", "pci", "ta", "rsrp"]
 
 state = {"obs": [], "towers": {}, "truth": [], "source": "", "status": "starting"}
 lock = threading.Lock()
+
+
+def sh(cmd, timeout=12):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
 
 
 # ----------------------------------------------------------------------------- geometry
@@ -169,70 +176,142 @@ def replay_feed(path, speed):
     state["status"] = "replay finished"
 
 
-def diag_feed(host, iface_gps):
-    """EXPERIMENTAL. Timing advance is not exposed on the AT interface of the RG650V; it lives in Qualcomm
-    diag logs (LTE MAC/ML1). This feeder forwards the modem's /dev/diag over ssh, enables the LTE log mask
-    and decodes the TA field. It is a skeleton until verified against the real device: it captures raw diag
-    frames to ~/ta-diag-raw.bin for offline inspection and emits observations only for frames it can decode.
-    Position comes from the Mudi GNSS (AT+QGPSLOC=2) polled every 2 s like the survey tool."""
-    state["source"] = f"diag {host} (experimental)"
-    raw = open(os.path.expanduser("~/ta-diag-raw.bin"), "ab")
+# ----------------------------------------------------------------------------- diag feeder
+def _crc16(d):
+    c = 0xFFFF
+    for b in d:
+        c ^= b
+        for _ in range(8):
+            c = (c >> 1) ^ 0x8408 if c & 1 else c >> 1
+    return c ^ 0xFFFF
+
+
+def _hdlc(p):
+    d = p + bytes([_crc16(p) & 0xFF, _crc16(p) >> 8]); o = bytearray()
+    for b in d:
+        if b in (0x7E, 0x7D):
+            o += bytes([0x7D, b ^ 0x20])
+        else:
+            o.append(b)
+    return bytes(o) + b"\x7e"
+
+
+def _unesc(f):
+    o = bytearray(); e = False
+    for b in f:
+        if e:
+            o.append(b ^ 0x20); e = False
+        elif b == 0x7D:
+            e = True
+        else:
+            o.append(b)
+    return bytes(o)
+
+
+def _log_mask(items, equip=0x0B, last=0xA00):
+    mask = bytearray((last + 7) // 8)
+    for it in items:
+        mask[(it & 0xFFF) // 8] |= 1 << ((it & 0xFFF) % 8)
+    return _hdlc(bytes([0x73, 0, 0, 0, 3, 0, 0, 0, equip, 0, 0, 0]) + last.to_bytes(4, "little") + bytes(mask))
+
+
+def parse_b062_rach(body):
+    """LTE MAC RACH Attempt → TA from Msg2 (RAR), 16 Ts units, or None."""
+    import struct
+    if len(body) < 8:
+        return None
+    pos = 4
+    for _ in range(body[1]):
+        if pos + 4 > len(body):
+            break
+        sid, sver, size = body[pos], body[pos + 1], struct.unpack("<H", body[pos + 2:pos + 4])[0]
+        sp = body[pos + 4:pos + 4 + size]; pos += 4 + size
+        if sid != 0x06:
+            continue
+        hdr = 4 if sver == 2 else 6
+        if len(sp) < hdr:
+            continue
+        result, bitmask = sp[hdr - 3], sp[hdr - 1]
+        q = hdr
+        if bitmask & 1:
+            q += 7 if sver == 0x32 else 4
+        if bitmask & 2 and q + 7 <= len(sp):
+            backoff, res2, tc_rnti, ta = struct.unpack("<HBHH", sp[q:q + 7])
+            if ta <= 1282:
+                return ta
+    return None
+
+
+def parse_b063_ta_cmds(body):
+    """LTE MAC DL Transport Block (v0x31/0x32) → list of TA Command CE values (0..63, 31 = no change)."""
+    import struct
+    cmds = []
+    if len(body) < 8 or body[0] not in (0x31, 0x32):
+        return cmds
+    num_tb = struct.unpack("<H", body[4:6])[0]; pos = 8 + (19 * 28 if body[0] == 0x31 else 0)
+    for _ in range(num_tb):
+        if pos + 16 > len(body):
+            break
+        size, npad, v1, cch, nsdu, hlen = struct.unpack("<LLLBBH", body[pos:pos + 16]); pos += 16
+        for _ in range(nsdu):
+            if pos + 3 > len(body):
+                break
+            v = int.from_bytes(body[pos:pos + 3], "little"); pos += 3
+            is_mce, lcid = v & 1, (v >> 1) & 0x3F
+            b = body[pos:pos + 9]; pos += 9
+            if is_mce and lcid == 29 and b:
+                cmds.append(b[0] & 0x3F)
+            elif not is_mce and len(b) >= 9:
+                npg, ndyn = struct.unpack("<5xBHx", b); pos += ndyn * 4
+                for _ in range(npg):
+                    more = 1
+                    while more == 1 and pos + 4 <= len(body):
+                        more = int.from_bytes(body[pos:pos + 4], "little") & 1; pos += 4
+    return cmds
+
+
+_cleanup = []
+
+
+def diag_feed(host, port=2500):
+    """Timing advance from the modem's Qualcomm diag stream, delivered by the Mudi's own diag-router over TCP.
+
+    The stock diag-router (which only serves the USB diag port) is stopped for the session and one that streams
+    to this machine is started instead; both are restored on exit. Log 0xB062 (RACH) gives the absolute TA, log
+    0xB063 (MAC DL transport blocks) carries the Timing Advance Command CEs that update it (TA += cmd - 31).
+    A re-registration is forced at start so an absolute TA arrives within seconds."""
+    import socket, subprocess as sp
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host]
-    have_socat = subprocess.run(ssh + ["command -v socat"], capture_output=True).returncode == 0
-    if not have_socat:
-        state["status"] = "diag: socat missing on router (opkg install socat) — cannot open /dev/diag bidirectionally"; return
-    p = subprocess.Popen(ssh + ["socat - /dev/diag,raw,echo=0"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    # DIAG_LOG_CONFIG_F (0x73) set-mask for equipment id 0xB (LTE): enable 0xB063 (MAC RACH attempt, carries TA)
-    # and 0xB0C0 (ML1 serving cell meas). HDLC-framed with CRC-16/X25 — see QCSuper's diag layer for the details.
-    def hdlc(payload):
-        crc = 0xFFFF
-        for b in payload:
-            crc ^= b
-            for _ in range(8):
-                crc = (crc >> 1) ^ 0x8408 if crc & 1 else crc >> 1
-        crc ^= 0xFFFF
-        data = payload + bytes([crc & 0xFF, crc >> 8])
-        out = bytearray()
-        for b in data:
-            if b in (0x7E, 0x7D):
-                out += bytes([0x7D, b ^ 0x20])
-            else:
-                out.append(b)
-        return bytes(out) + b"\x7e"
-    mask = bytearray(0x1000 // 8)
-    for lid in (0xB063, 0xB0C0, 0xB0C1, 0xB0C2):
-        mask[(lid & 0xFFF) // 8] |= 1 << ((lid & 0xFFF) % 8)
-    cmd = bytes([0x73, 0, 0, 0, 3, 0, 0, 0, 0x0B, 0, 0, 0]) + (0x1000 - 1).to_bytes(4, "little") + bytes(mask)
-    p.stdin.write(hdlc(cmd)); p.stdin.flush()
-    buf = bytearray()
-    while True:
-        chunk = p.stdout.read(4096)
-        if not chunk:
-            state["status"] = "diag: stream ended"; return
-        raw.write(chunk); raw.flush(); buf += chunk
-        while b"\x7e" in buf:
-            frame, _, buf = buf.partition(b"\x7e")
-            # un-escape
-            f = bytearray(); esc = False
-            for b in frame:
-                if esc:
-                    f.append(b ^ 0x20); esc = False
-                elif b == 0x7D:
-                    esc = True
-                else:
-                    f.append(b)
-            if len(f) < 16 or f[0] != 0x10:      # 0x10 = log packet
-                continue
-            log_id = int.from_bytes(f[6:8], "little")
-            body = f[16:]
-            ta = None
-            if log_id == 0xB063 and len(body) >= 24:      # MAC RACH attempt: TA at a firmware-version-dependent offset
-                ta = int.from_bytes(body[20:22], "little")   # placeholder offset — verify with the raw capture
-            if ta is None or ta > 1282:
-                continue
-            state["status"] = f"diag: TA {ta} from log 0x{log_id:X}"
-            # position + cell from the AT side
-            out = subprocess.run(ssh + ["timeout 4 atcmd 'AT+QGPSLOC=2'; timeout 4 atcmd 'AT+QENG=\"servingcell\"'"], capture_output=True, text=True, timeout=12).stdout
+    state["source"] = f"diag via {host}"
+    # this machine's address on the Mudi network
+    r = sh(["route", "-n", "get", host.split("@")[-1]], timeout=5)
+    ifc = next((ln.split(":")[1].strip() for ln in r.splitlines() if "interface:" in ln), None)
+    my_ip = next((ln.split()[1] for ln in sh(["ifconfig", ifc or "en12"], timeout=5).splitlines() if ln.strip().startswith("inet ")), None)
+    if not my_ip:
+        state["status"] = "diag: cannot determine my IP towards the Mudi"; return
+    srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); srv.bind(("0.0.0.0", port)); srv.listen(1); srv.settimeout(30)
+
+    def restore():
+        sh(ssh + ["killall diag-router 2>/dev/null; sleep 1; /etc/init.d/diag-router.init start >/dev/null 2>&1; echo restored"], timeout=20)
+    _cleanup.append(restore)
+    sh(ssh + ["/etc/init.d/diag-router.init stop >/dev/null 2>&1; killall diag-router 2>/dev/null; sleep 1; "
+              f"(diag-router -s {my_ip}:{port} -d 0 >/tmp/diag-ta.log 2>&1 &); echo started"], timeout=20)
+    try:
+        conn, _ = srv.accept()
+    except socket.timeout:
+        state["status"] = "diag: router did not connect (is diag-router present? is my IP reachable from it?)"; restore(); return
+    conn.settimeout(2)
+    conn.sendall(_log_mask([0x062, 0x063, 0x0C2]))
+    state["status"] = "diag connected; forcing re-registration for an initial TA…"
+    ta = {"abs": None, "cmds": 0, "rach": 0, "ts": None}
+
+    def reregister():
+        sh(ssh + ["timeout 8 atcmd 'AT+COPS=2'; sleep 2; timeout 8 atcmd 'AT+COPS=0'"], timeout=30)
+    threading.Thread(target=reregister, daemon=True).start()
+
+    def sampler():   # GPS + serving cell every 2 s → one observation per sample once TA is absolute
+        while True:
+            out = sh(ssh + ["timeout 4 atcmd 'AT+QGPSLOC=2'; timeout 4 atcmd 'AT+QENG=\"servingcell\"'"], timeout=14)
             lat = lon = None; cell = band = None; pci = rsrp = None
             for ln in out.splitlines():
                 if ln.startswith("+QGPSLOC:"):
@@ -241,9 +320,43 @@ def diag_feed(host, iface_gps):
                     except Exception: pass
                 if ln.startswith('+QENG: "LTE"'):
                     q = [x.strip('"') for x in ln.split(":", 1)[1].split(",")]
-                    band = "B" + q[7]; pci = float(q[5]); rsrp = float(q[11]); cell = f"{band}/{int(pci)}"
-            if lat is not None and cell:
-                add_obs({"ts": round(time.time(), 1), "lat": lat, "lon": lon, "cell": cell, "band": band, "pci": pci, "ta": ta, "rsrp": rsrp})
+                    try: band = "B" + q[7]; pci = float(q[5]); rsrp = float(q[11]); cell = f"{band}/{int(pci)}"
+                    except Exception: pass
+            st = f"TA {ta['abs']} ({ta['rach']} RACH, {ta['cmds']} TA cmds) · cell {cell} · " + ("GPS ok" if lat is not None else "no GPS fix")
+            state["status"] = st
+            if ta["abs"] is not None and lat is not None and cell:
+                add_obs({"ts": round(time.time(), 1), "lat": lat, "lon": lon, "cell": cell, "band": band, "pci": pci, "ta": ta["abs"], "rsrp": rsrp})
+            time.sleep(2)
+    threading.Thread(target=sampler, daemon=True).start()
+
+    import struct
+    buf = b""
+    while True:
+        try:
+            d = conn.recv(65536)
+        except socket.timeout:
+            continue
+        if not d:
+            state["status"] = "diag: stream ended"; break
+        buf += d
+        while b"\x7e" in buf:
+            fr, _, buf = buf.partition(b"\x7e")
+            if len(fr) < 20:
+                continue
+            f = _unesc(fr)
+            if f[0] == 0x98:
+                f = f[8:]
+            if f[0] != 0x10 or len(f) < 18:
+                continue
+            code = struct.unpack("<H", f[6:8])[0]; body = f[16:-2]
+            if code == 0xB062:
+                v = parse_b062_rach(body)
+                if v is not None:
+                    ta["abs"] = v; ta["rach"] += 1; ta["ts"] = time.time()
+            elif code == 0xB063 and ta["abs"] is not None:
+                for c in parse_b063_ta_cmds(body):
+                    ta["cmds"] += 1; ta["abs"] = max(0, min(1282, ta["abs"] + (c - 31)))
+    restore()
 
 
 # ----------------------------------------------------------------------------- web
@@ -360,13 +473,17 @@ def main():
     elif a.replay:
         threading.Thread(target=replay_feed, args=(a.replay, a.speed), daemon=True).start()
     else:
-        threading.Thread(target=diag_feed, args=(a.diag, None), daemon=True).start()
+        threading.Thread(target=diag_feed, args=(a.diag,), daemon=True).start()
     state["status"] = "ok"
     print(f"open http://localhost:{a.port}   observations → {OBS_CSV}")
-    try:
-        ThreadingHTTPServer(("0.0.0.0", a.port), H).serve_forever()
-    except KeyboardInterrupt:
-        pass
+    import signal
+    def bye(*_):
+        for fn in _cleanup:
+            try: fn()
+            except Exception: pass
+        os._exit(0)
+    signal.signal(signal.SIGTERM, bye); signal.signal(signal.SIGINT, bye)
+    ThreadingHTTPServer(("0.0.0.0", a.port), H).serve_forever()
 
 
 if __name__ == "__main__":
