@@ -1,0 +1,110 @@
+<title>Mudi Survey Panel Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --bg:#f3f4f2; --ink:#1b1f1c; --muted:#5f6862; --line:#d8dcd8; --card:#ffffff;
+  --panel:#161616; --panel-ink:#ededed; --panel-dim:#9a9a9a; --panel-row:#2b2b2b;
+  --good:#3fbf5a; --warn:#e6b542; --bad:#e35d5d; --nsa:#1f4d7a; --sa:#1d6b3a; --accent:#2b6cb0;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1210; --ink:#e9ece9; --muted:#9aa39c; --line:#2a302b; --card:#171b18;
+}}
+:root[data-theme="dark"]{ --bg:#0f1210; --ink:#e9ece9; --muted:#9aa39c; --line:#2a302b; --card:#171b18; }
+body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.5}
+.wrap{max-width:1040px;margin:0 auto;padding-block:36px 56px;padding-inline:20px}
+h1{font-size:30px;font-weight:700;letter-spacing:-.3px;margin:0 0 6px;text-wrap:balance}
+.lede{color:var(--muted);max-width:60ch;margin:0 0 28px}
+h2{font-size:18px;font-weight:600;margin:36px 0 10px}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:360px 1fr;gap:28px;align-items:start}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+
+/* ---- panel replica ---- */
+.panel{background:var(--panel);color:var(--panel-ink);border-radius:14px;padding:14px 16px;position:sticky;top:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.panel .big{font-size:50px;font-weight:800;line-height:1;letter-spacing:-1px;color:var(--bad)}
+.panel .unit{font-size:13px;color:var(--panel-dim);margin-left:6px}
+.panel .sub{font-size:12px;color:var(--panel-dim)}
+.panel .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:6px 0;position:relative}
+.panel .lbl{color:var(--panel-dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.panel .val{font-weight:600;text-align:right}
+.panel .bar{height:5px;background:#333;border-radius:3px;overflow:hidden;margin-top:2px}.panel .bar i{display:block;height:100%}
+.panel .badge{display:inline-block;padding:2px 8px;border-radius:6px;background:var(--nsa);font-weight:600}
+.panel hr{border:0;border-top:1px solid #333;margin:8px 0}
+.panel .btn{display:inline-block;background:#333;border-radius:6px;padding:5px 9px;margin:6px 4px 0 0;font-size:13px}.panel .btn.on{background:#2a6}
+.spark{display:flex;align-items:flex-end;gap:3px;height:34px;margin:8px 0 4px}.spark i{width:9px;display:block;border-radius:1px}
+.g{color:var(--good)}.y{color:var(--warn)}.r{color:var(--bad)}
+.tag{position:absolute;left:-30px;top:-2px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:"IBM Plex Mono",monospace}
+.panel{padding-left:44px}
+
+/* ---- callouts ---- */
+.callouts{display:flex;flex-direction:column;gap:10px}
+.co{display:grid;grid-template-columns:26px 1fr;gap:12px;padding:12px 14px;background:var(--card);border:1px solid var(--line);border-radius:10px}
+.co .n{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:"IBM Plex Mono",monospace}
+.co b{display:block;font-weight:600;margin-bottom:2px}
+.co p{margin:0;color:var(--muted);max-width:62ch}
+.co .why{margin-top:6px;color:var(--ink);font-size:14px}
+
+/* ---- thresholds ---- */
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{text-align:left;color:var(--muted);font-weight:500;padding:6px 10px;border-bottom:1px solid var(--line)}
+td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media (max-width:760px){.rules{grid-template-columns:1fr}}
+.rule{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.rule b{display:block;margin-bottom:4px}.rule p{margin:0;color:var(--muted);font-size:14px}
+</style>
+
+<div class="wrap">
+  <h1>Reading the drive-survey panel</h1>
+  <p class="lede">The left panel of the survey map, line by line, with the values from your screenshot. Numbers on the replica match the notes on the right.</p>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="row" style="margin:0"><span class="tag">1</span><span><span class="big">33</span><span class="unit">Mbps upload test</span></span></div>
+      <div class="sub">next probe soon</div>
+      <div class="row" style="margin:4px 0 0"><span class="tag">2</span><span class="sub">last 4 tests</span></div>
+      <div class="spark"><i style="height:24px;background:var(--warn)"></i><i style="height:14px;background:var(--bad)"></i><i style="height:26px;background:var(--warn)"></i><i style="height:12px;background:var(--bad)"></i></div>
+      <div class="row"><span class="tag">3</span><span class="lbl">network</span><span class="val"><span class="badge">5G NSA</span></span></div>
+      <div class="row"><span class="tag">4</span><span class="lbl">upload carrier</span><span class="val r mono">B8 · 10 MHz</span></div>
+      <div class="row"><span class="tag">5</span><span class="lbl">all carriers</span><span class="val mono" style="font-weight:500;color:var(--panel-dim)">B8(10) + B3(20) + B3(10) + n1(20)</span></div>
+      <div class="row"><span class="tag">6</span><span class="lbl">signal RSRP</span><span class="val"><span class="g mono">-59 dBm</span> <span class="sub">PCI 171</span></span></div>
+      <div class="bar"><i style="width:100%;background:#e08a2a"></i></div>
+      <div class="row"><span class="tag">7</span><span class="lbl">quality SINR</span><span class="val g mono">20 dB</span></div>
+      <div class="bar"><i style="width:71%;background:#8fd23a"></i></div>
+      <div class="row"><span class="tag">8</span><span class="lbl">5G carrier</span><span class="val mono">n1 · 20 MHz · <span class="g">SINR 26</span></span></div>
+      <hr>
+      <div class="row" style="margin:0"><span class="tag">9</span><span class="sub">no GPS fix yet · 11 samples</span></div>
+      <div class="row" style="display:block;margin:2px 0 0"><span class="tag">10</span><span class="btn on">follow</span><span class="btn">probe now</span><span class="btn">color: upload</span><span class="btn">center + zoom</span><span class="btn on">browser GPS</span></div>
+    </div>
+
+    <div class="callouts">
+      <div class="co"><span class="n">1</span><div><b>Upload test — the number that matters</b><p>Every 20 s the tool pushes an 8 MB file through the Mudi to Google Cloud Storage and times it. This is the real upload speed at the spot you are in right now.</p><p class="why">Colour: <span class="g">green ≥ 80</span>, <span class="y">yellow ≥ 40</span>, <span class="r">red below 40</span>. Your 33 is red because the upload carrier is weak (see 4).</p></div></div>
+      <div class="co"><span class="n">2</span><div><b>Last tests</b><p>One bar per test, newest on the right, same colours as above. Shows the trend as you drive: rising bars mean you are heading the right way.</p></div></div>
+      <div class="co"><span class="n">3</span><div><b>Network</b><p>What the modem is connected to. <span class="mono">5G NSA</span> = LTE anchor with a 5G add-on carrier; <span class="mono">5G SA</span> = pure 5G, the best case for upload; <span class="mono">LTE</span> = 4G only.</p></div></div>
+      <div class="co"><span class="n">4</span><div><b>Upload carrier — the line to watch</b><p>The primary carrier. Your upload data travels on this one carrier, whatever else is aggregated. Wider is faster: <span class="g">20 MHz green</span>, <span class="y">15 yellow</span>, <span class="r">10 or less red</span>.</p><p class="why">Here it is B8 at 10 MHz, a low band with half the width of B3 at 20 MHz. That alone caps upload well below what the same spot gives on B3. A good spot is one where this line reads B3 · 20 MHz or n78.</p></div></div>
+      <div class="co"><span class="n">5</span><div><b>All carriers</b><p>Every carrier the modem has bonded, primary first. Mostly a download story; kept small so you can see when the set changes.</p></div></div>
+      <div class="co"><span class="n">6</span><div><b>Signal strength, RSRP</b><p>How loud the tower is, in dBm. Closer to zero is better: <span class="g">≥ -80 green</span>, <span class="y">≥ -95 yellow</span>, <span class="r">weaker red</span>. -59 is excellent. PCI is the cell's ID; when it changes you have been handed to another cell.</p></div></div>
+      <div class="co"><span class="n">7</span><div><b>Signal quality, SINR</b><p>Signal versus noise and neighbouring cells, in dB. This predicts upload better than RSRP: <span class="g">≥ 15 green</span>, <span class="y">≥ 5 yellow</span>, <span class="r">below red</span>. Strong RSRP with poor SINR means interference, usually between two towers.</p></div></div>
+      <div class="co"><span class="n">8</span><div><b>5G carrier</b><p>The 5G add-on: band, width and its own SINR. n1 at 20 MHz adds little for upload. A spot showing n78 with 80 to 100 MHz would be the prize.</p></div></div>
+      <div class="co"><span class="n">9</span><div><b>Position and sample count</b><p>Where the position comes from (the modem's GPS, or the browser while indoors) and how many 2-second samples have been logged to the CSV.</p></div></div>
+      <div class="co"><span class="n">10</span><div><b>Controls</b><p><b style="display:inline">follow</b> keeps the map on you · <b style="display:inline">probe now</b> runs an extra test immediately · <b style="display:inline">color</b> switches the track between upload speed and SINR · <b style="display:inline">center + zoom</b> jumps to street level · <b style="display:inline">browser GPS</b> uses the laptop or phone location instead of the modem.</p></div></div>
+    </div>
+  </div>
+
+  <h2>What a good spot looks like</h2>
+  <div class="rules">
+    <div class="rule"><b>Upload carrier B3 · 20 MHz, or n78</b><p>The single biggest factor. Drive until line 4 turns green, then look for the best test result within that area.</p></div>
+    <div class="rule"><b>SINR above 15 dB</b><p>Strong signal is not enough; a spot between two towers can have -60 dBm and still upload slowly. Line 7 tells you.</p></div>
+    <div class="rule"><b>Stable cell, stable numbers</b><p>Park where the PCI stops changing and three tests in a row agree. The best-spots table on the right ranks 60 m cells by their best test.</p></div>
+  </div>
+
+  <h2>Thresholds used for the colours</h2>
+  <div style="overflow-x:auto"><table>
+    <tr><th>Line</th><th>Green</th><th>Yellow</th><th>Red</th></tr>
+    <tr><td>Upload test</td><td class="mono">≥ 80 Mbps</td><td class="mono">40 – 79</td><td class="mono">&lt; 40</td></tr>
+    <tr><td>Upload carrier width</td><td class="mono">20 MHz</td><td class="mono">15 MHz</td><td class="mono">≤ 10 MHz</td></tr>
+    <tr><td>RSRP</td><td class="mono">≥ -80 dBm</td><td class="mono">-81 – -95</td><td class="mono">&lt; -95</td></tr>
+    <tr><td>SINR</td><td class="mono">≥ 15 dB</td><td class="mono">5 – 14</td><td class="mono">&lt; 5</td></tr>
+  </table></div>
+</div>
