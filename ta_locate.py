@@ -329,6 +329,11 @@ def diag_feed(host, port=2500):
             time.sleep(2)
     threading.Thread(target=sampler, daemon=True).start()
 
+    def keepalive():   # TA is only maintained while RRC-connected: keep a trickle of traffic on the Mudi link
+        while True:
+            sh(["ping", "-c", "8", "-i", "1", "-b", ifc or "en12", "8.8.8.8"], timeout=15)
+    threading.Thread(target=keepalive, daemon=True).start()
+
     import struct
     buf = b""
     while True:
