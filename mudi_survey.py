@@ -134,7 +134,9 @@ def probe(iface, mb):
     if not os.path.exists(tmp):
         with open(tmp, "wb") as f:
             f.write(os.urandom(mb * 1048576))
-    out = sh(["curl", "-s", "-o", "/dev/null", "-m", "12", "--interface", iface, "-T", tmp,
+    # pin the address: macOS caches a failed lookup for a while after every modem re-registration
+    ip = (sh(["dig", "+short", "+time=2", "storage.googleapis.com", "@8.8.8.8"], timeout=6).split() or ["142.250.185.187"])[-1]
+    out = sh(["curl", "-s", "-o", "/dev/null", "-m", "12", "--interface", iface, "--resolve", f"storage.googleapis.com:443:{ip}", "-T", tmp,
               "-w", "%{speed_upload} %{time_total} %{http_code}", "https://storage.googleapis.com/"], timeout=15)
     p = out.split()
     if len(p) >= 2 and num(p[0]):
