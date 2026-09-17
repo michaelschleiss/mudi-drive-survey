@@ -61,3 +61,24 @@ Written and tested on macOS 27 with a Mudi 7 on Deutsche Telekom (5G NSA, B3+B8+
 band test, full scan and mast estimation were added last and have had less road testing than the rest; the AT
 syntax was verified on the RG650V, the end-to-end flows not yet. Restores band/mode defaults in a `finally` block
 either way.
+
+## ta_locate.py — tower localisation from timing advance
+
+Timing advance is the tower's own range measurement (one LTE step = 78 m one-way). `ta_locate.py` collects
+(position, cell, TA) observations along a drive, fits each tower as the point whose distances best match the
+range annuli (robust Gauss–Newton, Huber loss, NLOS prior), and shows the process live: every observation as a
+fading ring, the fit converging along a dotted trail, and a 2σ uncertainty ellipse. Scrub or replay the drive.
+
+```
+python3 ta_locate.py --sim --speed 20          # synthetic drive past three towers, ground truth shown as ✛
+python3 ta_locate.py --replay ~/ta-observations.csv --speed 10
+python3 ta_locate.py --diag                    # EXPERIMENTAL: TA from the modem's Qualcomm diag port via ssh
+```
+
+Open http://localhost:8766. On the simulator the fit lands within 15–65 m of the true masts after a couple of
+minutes of driving.
+
+The AT interface of the RG650V does not expose TA, so the real feeder reads Qualcomm diag logs over ssh
+(`socat - /dev/diag` on the Mudi). That feeder is a skeleton: HDLC framing and the log-mask command are
+implemented, the TA field offset inside log 0xB063 is a placeholder to be confirmed against the raw capture it
+writes to `~/ta-diag-raw.bin`. RSRP-centroid estimates remain available in `mudi_survey.py` as the fallback.
