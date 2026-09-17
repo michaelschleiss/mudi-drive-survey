@@ -1,7 +1,11 @@
 # Mudi drive survey
 
 Find the spot with the fastest cellular **upload** using a GL.iNet Mudi 7 (GL-E5800, Quectel RG650V) and a laptop, while driving.
-No phone or extra hardware needed: the modem's own GNSS provides the position.
+
+**Position source:** a phone. The Mudi 7's modem has a GNSS receiver but GL.iNet confirmed the antenna pin is left
+floating on the board (https://forum.gl-inet.com/t/mudi7-gps/68619), so it never sees a satellite. Open the map page
+on a phone connected to the Mudi Wi-Fi (`http://<laptop-ip>:8765` / `:8766`), allow location, and both tools use the
+phone's GPS. They still poll the modem GNSS and would prefer it if a fix ever appeared.
 
 
 ## What it does
