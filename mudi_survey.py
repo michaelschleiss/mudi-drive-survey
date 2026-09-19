@@ -65,6 +65,45 @@ def num(x):
         return None
 
 
+# AT+QCAINFO moves its fields between RATs and firmware variants, so every shape
+# is read by its own map rather than by shared offsets: the 8-field NR line puts
+# the PCI where the other shapes put a spare field, and the 12-field NR line
+# pushes RSRP/RSRQ four places further right.
+#   (RAT, field count): (arfcn, bandwidth, pci, rsrp, rsrq)
+QCAINFO_FIELDS = {("LTE", 10): (1, 2, 5, 6, 7),
+                  ("LTE", 13): (1, 2, 5, 6, 7),
+                  ("NR5G", 8): (1, 2, 4, 5, 6),
+                  ("NR5G", 12): (1, 2, 5, 9, 10)}
+# Shapes we have not seen still carry band and channel in their first fields.
+QCAINFO_UNKNOWN = (1, 2, None, None, None)
+
+
+def parse_carriers(out):
+    """Every aggregated carrier from AT+QCAINFO, keeping the per-carrier signal.
+
+    SINR is deliberately not read here. The serving carrier reports it through
+    QENG, secondary carriers do not report one at all, and the field sitting
+    where SINR would go holds unvalidated values (745, -32768) that are not dB.
+    """
+    carriers = []
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if not ln.startswith("+QCAINFO:"):
+            continue
+        p = [x.strip().strip('"') for x in ln.split(":", 1)[1].split(",")]
+        m = re.match(r"(LTE|NR5G) BAND (\d+)", p[3]) if len(p) > 3 else None
+        if not m:
+            continue
+        nr = m.group(1) == "NR5G"
+        arfcn, bw, pci, rsrp, rsrq = (num(p[i]) if i is not None and i < len(p) else None
+                                      for i in QCAINFO_FIELDS.get((m.group(1), len(p)), QCAINFO_UNKNOWN))
+        width = (NR_BW if nr else LTE_BW).get(int(bw or 0), bw or 0)
+        carriers.append({"role": p[0], "rat": "nr" if nr else "lte",
+                         "band": ("n" if nr else "B") + m.group(2), "arfcn": arfcn,
+                         "bw_mhz": width, "pci": pci, "rsrp": rsrp, "rsrq": rsrq})
+    return carriers
+
+
 def parse_modem(out):
     d = {"rat": None, "lte_band": None, "lte_bw": None, "lte_pci": None, "lte_rsrp": None, "lte_rsrq": None, "lte_sinr": None,
          "nr_band": None, "nr_bw": None, "nr_pci": None, "nr_rsrp": None, "nr_sinr": None, "ca": "", "n_carriers": 0,
@@ -95,22 +134,15 @@ def parse_modem(out):
             if len(p) >= 6 and p[1] == "LTE" and num(p[2]) is not None:
                 d["neighbours"].append({"kind": p[0].split()[-1], "earfcn": int(num(p[2])), "band": earfcn_band(int(num(p[2]))),
                                         "pci": num(p[3]), "rsrq": num(p[4]), "rsrp": num(p[5])})
-        elif ln.startswith("+QCAINFO:"):
-            p = [x.strip('"') for x in ln.split(":", 1)[1].split(",")]
-            # "PCC"/"SCC",ARFCN,bw,"LTE BAND 3"|"NR5G BAND 78",...
-            if len(p) >= 4:
-                m = re.match(r"(LTE|NR5G) BAND (\d+)", p[3])
-                if m:
-                    bw = num(p[2]) or 0
-                    bwm = LTE_BW.get(int(bw), bw) if m.group(1) == "LTE" else NR_BW.get(int(bw), bw)
-                    tag = ("B" if m.group(1) == "LTE" else "n") + m.group(2) + f"({bwm:g})"
-                    d["ca"] = (d["ca"] + "+" if d["ca"] else "") + tag
-                    d["n_carriers"] += 1
         elif ln.startswith("+QGPSLOC:"):
             p = ln.split(":", 1)[1].split(",")
             # UTC,lat,lon,hdop,alt,fix,cog,spkm,spkn,date,nsat   (mode 2: decimal degrees)
             if len(p) >= 11 and num(p[1]) is not None:
                 d.update(lat=num(p[1]), lon=num(p[2]), speed_kmh=num(p[7]), nsat=num(p[10]), gps_src="modem")
+    # The carrier list is the primary record; the CA string is a rendering of it.
+    d["carriers"] = parse_carriers(out)
+    d["ca"] = "+".join(f'{c["band"]}({c["bw_mhz"]:g})' for c in d["carriers"])
+    d["n_carriers"] = len(d["carriers"])
     return d
 
 

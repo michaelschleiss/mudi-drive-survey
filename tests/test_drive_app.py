@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from drive_app import Survey, position, qualify_probe, upload, upload_batch, request_measurement, percentile, handler, probe_worker, parse_radio, position_at
 from drive_app import parse_uplink_layers, summarize_uplink
+import mudi_survey
 
 
 def fix(ts, lat=52, acc=5):
@@ -38,6 +39,33 @@ class AcquisitionTests(unittest.TestCase):
         nr = [c for c in summary['carriers'] if c['band'] == 'n78']
         self.assertEqual([(c['pci'], c['positive_samples']) for c in nr], [(414, 1), (415, 0)])
         self.assertEqual(parse_uplink_layers('ERROR')['carriers'], [])
+
+    def test_carrier_table_reads_every_qcainfo_shape_and_keeps_signal(self):
+        raw = ('+QCAINFO: "PCC",100,100,"LTE BAND 1",1,200,-105,-8,-74,8\n'
+               '+QCAINFO: "SCC",9460,50,"LTE BAND 28",1,495,-101,-16,-76,253,0,-,-\n'
+               '+QCAINFO: "SCC",631968,10,"NR5G BAND 78",287,-110,-11,745\n'
+               '+QCAINFO: "SCC",372750,4,"NR5G BAND 3",1,620,0,-,-,-111,-16,-32768')
+        carriers = mudi_survey.parse_carriers(raw)
+        self.assertEqual([(c['band'], c['bw_mhz']) for c in carriers],
+                         [('B1', 20), ('B28', 10), ('n78', 80), ('n3', 25)])
+        # The 8-field NR line keeps PCI one place left of every other shape, and
+        # the 12-field NR line pushes RSRP/RSRQ four places right. Reading either
+        # with shared offsets would report a signal level as a PCI.
+        self.assertEqual([c['pci'] for c in carriers], [200, 495, 287, 620])
+        self.assertEqual([c['rsrp'] for c in carriers], [-105, -101, -110, -111])
+        self.assertEqual([c['rsrq'] for c in carriers], [-8, -16, -11, -16])
+        self.assertEqual([c['role'] for c in carriers], ['PCC', 'SCC', 'SCC', 'SCC'])
+
+    def test_carrier_table_backs_the_ca_string_and_survives_unknown_shapes(self):
+        raw = ('+QCAINFO: "PCC",3749,50,"LTE BAND 8",1,363\n'
+               '+QCAINFO: "SCC",641760,11,"NR5G BAND 78",414')
+        # An unrecognised field count still yields band and channel, so the CA
+        # summary and the carrier count never silently lose a carrier.
+        self.assertEqual(mudi_survey.parse_modem(raw)['ca'], 'B8(10)+n78(90)')
+        self.assertEqual(mudi_survey.parse_modem(raw)['n_carriers'], 2)
+        self.assertEqual([c['pci'] for c in mudi_survey.parse_carriers(raw)], [None, None])
+        self.assertEqual(mudi_survey.parse_carriers('ERROR'), [])
+        self.assertEqual(mudi_survey.parse_modem('ERROR')['ca'], '')
 
     def test_position_matches_time_not_average_of_irregular_fixes(self):
         fixes=[fix(100,52),fix(100.1,52.00001),fix(100.2,52.00002),fix(102,52.0002)]

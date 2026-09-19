@@ -17,10 +17,12 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from mudi_survey import parse_modem, router, passive_rate
+from radio_transport import poll as poll_radio
 import mudi_survey
 
 ROOT = Path(__file__).parent
@@ -118,7 +120,12 @@ class Survey:
         self.target = None
         self.ta_enabled = False
         self.ta_status = 'Experimental capture off'
+        self.lte_ta_status = 'LTE timing capture off'
         self.ta_capture = None
+        self.session_id = uuid.uuid4().hex
+        self.association_epoch = uuid.uuid4().hex
+        self.radio_identity = None
+        self.range_areas = []
         self.ranges = deque(maxlen=300)
         self.radio_track = deque(maxlen=12000)
         self.seq = 0
@@ -140,7 +147,7 @@ class Survey:
         self.events.append(event)
         kind = event['kind']
         self.latest[kind] = event
-        if kind == 'nr_range':
+        if kind in ('nr_range', 'lte_range', 'lte_timing_snapshot'):
             self.ranges.append(event)
         if kind == 'hunt_target':
             self.target = event.get('identity')
@@ -188,7 +195,8 @@ class Survey:
                     'best_position': None, 'candidate_position': None, 'hunt_priority': 0, 'best_rsrp': None, 'best_sinr': None}
             cell = self.cells[identity]
             cell.update(last_seen=radio['ts'], bandwidth_mhz=radio.get(prefix+'_bw'),
-                        tac=radio.get(prefix+'_tac'))
+                        tac=radio.get(prefix+'_tac'), subscription=radio.get('subscription'),
+                        session_id=radio.get('session_id'), association_epoch=radio.get('association_epoch'))
             cell['observations'] += 1
             rsrp, sinr = radio.get(prefix+'_rsrp'), radio.get(prefix+'_sinr')
             if sinr is not None:
@@ -216,6 +224,15 @@ class Survey:
         with self.lock:
             data = dict(data)
             data.setdefault('ts', time.time())
+            if kind == 'radio':
+                identity = tuple(data.get(k) for k in ('subscription', 'subscription_switch_count', 'rat',
+                    'rrc_state', 'lte_plmn', 'lte_cell_id', 'lte_pci', 'lte_arfcn',
+                    'nr_plmn', 'nr_cell_id', 'nr_pci', 'nr_arfcn'))
+                if identity != self.radio_identity:
+                    self.radio_identity = identity
+                    self.association_epoch = uuid.uuid4().hex
+                    self.range_areas = []
+                data.update(session_id=self.session_id, association_epoch=self.association_epoch)
             cur = self.db.execute('INSERT INTO events(kind,ts,data) VALUES (?,?,?)',
                                   (kind, data['ts'], json.dumps(data, allow_nan=False)))
             self.db.commit()
@@ -244,8 +261,23 @@ class Survey:
                     'peak': values[-1], 'success_rate': (len(values)-s['failed'])/len(values), 'confidence': 'Repeated' if len(values) >= 3 else 'Provisional'})
             best.sort(key=lambda s: (s['floor'], s['n']), reverse=True)
             reset = since > self.seq or bool(self.events and since and since < self.events[0]['id']-1)
+            display_ranges = []
+            for recorded in self.ranges:
+                row = {k:v for k,v in recorded.items() if not k.endswith('_hex')}
+                # The QMI timing is a cached modem value. Attach only the GPS
+                # point at retrieval for an explicitly temporary visual overlay;
+                # never make it eligible for evidence or mast estimation.
+                if row['kind'] == 'lte_timing_snapshot' and row.get('range_m') is not None:
+                    point = position_at(self.fixes, row.get('received_ts', row['ts']))
+                    if point and point['acc_m'] <= 30:
+                        row.update(temporary_lat=point['lat'], temporary_lon=point['lon'],
+                                   temporary_acc_m=point['acc_m'],
+                                   temporary_position_method='GPS at QMI retrieval; timing measurement age unknown')
+                display_ranges.append(row)
             return {'experimental_ta': {'enabled': self.ta_enabled, 'status': self.ta_status, 'capture': self.ta_capture,
-                    'ranges': [{k:v for k,v in r.items() if not k.endswith('_hex')} for r in self.ranges]},
+                    'session_id': self.session_id, 'association_epoch': self.association_epoch,
+                    'areas': self.range_areas, 'lte_status': self.lte_ta_status,
+                    'timing_snapshot': self.latest.get('lte_timing_snapshot'), 'ranges': display_ranges},
                     'target': self.target, 'observations': [o for o in self.radio_track if reset or not since or o['id'] > since],
                     'track_limit': self.radio_track.maxlen, 'latest': dict(self.latest), 'events': [e for e in self.events if reset or e['id'] > since],
                     'cells': sorted((dict(c) for c in self.cells.values()), key=lambda c: (c.get('hunt_priority', 0), bool(c.get('candidate_position')), (c.get('candidate_position') or {}).get('sinr') if (c.get('candidate_position') or {}).get('sinr') is not None else -999, c.get('bandwidth_mhz') or 0), reverse=True),
@@ -284,18 +316,16 @@ def parse_uplink_layers(out):
     Firmware can retain layer counts, so receipt time is not sample age.
     """
     bands = {}
+    for carrier in mudi_survey.parse_carriers(out):
+        if carrier['arfcn'] is not None:
+            bands.setdefault((carrier['rat'], int(carrier['arfcn'])), set()).add(carrier['band'])
     layers = []
     for line in out.splitlines():
-        if not line.startswith(('+QCAINFO:', '+QNWCFG:')):
+        if not line.startswith('+QNWCFG:'):
             continue
         try:
             f = next(csv.reader([line.split(':', 1)[1].strip()], skipinitialspace=True))
-            if line.startswith('+QCAINFO:') and len(f) >= 4:
-                match = re.fullmatch(r'(LTE|NR5G) BAND (\d+)', f[3])
-                if match:
-                    rat = 'nr' if match[1] == 'NR5G' else 'lte'
-                    bands.setdefault((rat, int(f[1])), set()).add(('n' if rat == 'nr' else 'B')+match[2])
-            elif f[0] in ('lte_mimo_info', 'nr5g_mimo_info') and len(f) == 5:
+            if f[0] in ('lte_mimo_info', 'nr5g_mimo_info') and len(f) == 5:
                 pci, channel, dl, ul = map(int, f[1:])
                 rat = 'nr' if f[0].startswith('nr') else 'lte'
                 if 0 <= pci <= (1007 if rat == 'nr' else 503) and channel >= 0 and 0 <= dl <= 8 and 0 <= ul <= 8:
@@ -336,8 +366,18 @@ def radio_worker(survey, stop, interval):
             next_neighbours = start + 2
         if testing:
             commands += ['AT+QNWCFG="lte_mimo_info"', 'AT+QNWCFG="nr5g_mimo_info"']
-        out = router(commands)
-        d = parse_radio(out)
+        try:
+            polled = poll_radio(mudi_survey.SSH, commands)
+            out = polled['raw']
+            d = parse_radio(out)
+            match = re.search(r'\"servingcell\",\"([^\"]+)\"', out)
+            d['rrc_state'] = match.group(1) if match else None
+            d['subscription'] = polled['subscription']
+            d['subscription_switch_count'] = polled['switch_count']
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+            out = ''
+            d = parse_radio(out)
+            d['subscription'] = None
         with survey.lock:
             previous = survey.latest.get('radio', {})
         if not neighbours_due:
@@ -679,6 +719,14 @@ def handler(survey, config):
                 with survey.lock:
                     writer.writerows(survey.db.execute('SELECT id,kind,ts,data FROM events ORDER BY id'))
                 self.reply(out.getvalue().encode(), mime='text/csv')
+            elif url.path == '/api/emf-sites':
+                source = ROOT.parent/'outputs'/'emf-sites-10km.json'
+                if not source.exists():
+                    return self.reply({'error': 'No imported EMF sites'}, 404)
+                try:
+                    self.reply(json.loads(source.read_text()))
+                except (OSError, json.JSONDecodeError):
+                    self.reply({'error': 'Imported EMF site data is unreadable'}, 500)
             else:
                 files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
                          '/localization.js': 'localization.js',
@@ -790,6 +838,8 @@ def main():
     if config.upload_url and not config.demo:
         jobs.append((probe_worker, (survey, stop, config)))
     if not config.demo:
+        from qmi_location import worker as lte_ta_worker
+        jobs.append((lte_ta_worker, (survey, stop, mudi_survey.SSH)))
         from nr_localization import worker as ta_worker
         jobs.append((ta_worker, (survey, stop, mudi_survey.SSH)))
     threads = []
