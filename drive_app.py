@@ -180,7 +180,10 @@ class Survey:
                 'lat': gps['lat'], 'lon': gps['lon'], 'acc_m': gps['acc_m'], 'radio': fields})
         for prefix in ('lte', 'nr'):
             band, pci = radio.get(prefix+'_band'), radio.get(prefix+'_pci')
-            if not band or pci is None:
+            # PCI 0xFFFF and band 0 are the modem's "no measurement yet" sentinels.
+            # Records written before they were filtered at parse time replay from
+            # the database, so the inventory rejects them here too.
+            if not band or pci is None or pci == 65535 or band in ('n0', 'B0'):
                 continue
             plmn = radio.get(prefix+'_plmn')
             channel = radio.get(prefix+'_arfcn')

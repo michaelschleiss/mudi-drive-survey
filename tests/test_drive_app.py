@@ -81,6 +81,11 @@ class AcquisitionTests(unittest.TestCase):
             survey.record('gps', {'lat': 48.1, 'lon': 11.2, 'acc_m': 5})
             survey.record('radio', dict(r, ts=time.time()))
             self.assertEqual([c['band'] for c in survey.snapshot(0)['cells']], ['B1'])
+            # Records stored before the parse-time guard replay straight from the
+            # database, so the inventory must reject the sentinel identity again.
+            survey.record('radio', dict(r, ts=time.time(), nr_band='n0', nr_pci=65535.0,
+                                        nr_arfcn=0.0, nr_plmn='262-02'))
+            self.assertEqual([c['band'] for c in survey.snapshot(0)['cells']], ['B1'])
         finally:
             survey.db.close()
 
