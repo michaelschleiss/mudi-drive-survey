@@ -39,27 +39,42 @@ window.consumeRadio=(events,reset)=>{
   const select=document.getElementById('radio-layer');select.value='hunt';select.dispatchEvent(new Event('change'));
  }
 };
-function servingCard(label,r,prefix){
+function servingCard(c){
  const card=document.createElement('div');card.className='radio-carrier';
- const title=document.createElement('strong');title.textContent=`${label} · ${r[prefix+'_band']||'not reported'}`;
- const values=document.createElement('span');values.textContent=`PCI ${fmt(r[prefix+'_pci'])} · ${fmt(r[prefix+'_bw'])} MHz`;
- const signal=document.createElement('b');signal.textContent=`RSRP ${fmt(r[prefix+'_rsrp'])} dBm · SINR ${fmt(r[prefix+'_sinr'])} dB`;
- const quality=document.createElement('small');quality.textContent=`RSRQ ${fmt(r[prefix+'_rsrq'])} dB · ${r[prefix+'_plmn']||'PLMN —'} · Cell ${r[prefix+'_cell_id']||'ID not reported'} · Channel ${fmt(r[prefix+'_arfcn'])} · TAC ${r[prefix+'_tac']||'—'}`;
+ const title=document.createElement('strong');title.textContent=`${c.label} · ${c.band||'not reported'}`;
+ const values=document.createElement('span');values.textContent=`PCI ${fmt(c.pci)} · ${fmt(c.bw_mhz)} MHz`;
+ const signal=document.createElement('b');signal.textContent=`RSRP ${fmt(c.rsrp)} dBm · SINR ${fmt(c.sinr)} dB`;
+ const quality=document.createElement('small');quality.textContent=`RSRQ ${fmt(c.rsrq)} dB · ${c.plmn||'PLMN —'} · Cell ${c.cell_id||'ID not reported'} · Channel ${fmt(c.arfcn)} · TAC ${c.tac||'—'}`;
  card.append(title,values,signal,quality);return card;
+}
+// QENG names only the serving carriers; QCAINFO lists every aggregated one.
+// Identified carriers keep their QENG values, secondaries show what QCAINFO
+// reports and leave the rest blank rather than borrowing the serving cell's.
+function carrierCards(r){
+ const serving=['lte','nr'].filter(p=>r[p+'_band']).map(p=>({
+  label:p==='lte'?'LTE':r.rat==='NR5G-SA'?'5G SA':'5G',band:r[p+'_band'],pci:r[p+'_pci'],bw_mhz:r[p+'_bw'],
+  rsrp:r[p+'_rsrp'],sinr:r[p+'_sinr'],rsrq:r[p+'_rsrq'],plmn:r[p+'_plmn'],cell_id:r[p+'_cell_id'],
+  arfcn:r[p+'_arfcn'],tac:r[p+'_tac']}));
+ if(!r.carriers?.length)return serving;
+ const byBand=new Map(serving.map(c=>[c.band,c]));
+ return r.carriers.map(c=>byBand.get(c.band)||{
+  label:(c.rat==='nr'?'5G':'LTE')+' '+(c.role||'SCC'),band:c.band,pci:c.pci,bw_mhz:c.bw_mhz,
+  rsrp:c.rsrp,sinr:null,rsrq:c.rsrq,plmn:null,cell_id:null,arfcn:c.arfcn,tac:null});
 }
 window.renderRadio=st=>{
  const r=st.latest.radio||{},fresh=!!r.rat&&age(r)<=Math.max(3,st.config.radio_interval*3);
  radioText('radio-live-status',fresh?`${r.rat.replace('NR5G-','5G ')} · ${fmt(age(r),1)} s ago · ${fmt(r.poll_ms)} ms poll`:'Modem unavailable / reading stale');
  radioText('dock-radio-age',fresh?`${fmt(age(r),1)} s ago`:'STALE / NO MODEM');radioDock.classList.toggle('radio-stale',!fresh);
  radioText('radio-ca',r.ca?r.ca.replaceAll('+',' + '):'No aggregation reported');radioText('dock-ca',r.ca?r.ca.replaceAll('+',' + '):'No aggregation reported');
- for(const id of ['radio-serving','dock-serving']){const target=document.getElementById(id);target.replaceChildren(servingCard('LTE',r,'lte'),servingCard('5G',r,'nr'));}
+ const cards=carrierCards(r);
+ for(const id of ['radio-serving','dock-serving']){const target=document.getElementById(id);target.replaceChildren(...cards.map(servingCard));}
  const neighbours=r.neighbours||[];radioText('dock-neighbour-count',neighbours.length);
  const tbody=document.getElementById('radio-neighbours');tbody.replaceChildren();
  const rows=[...(r.lte_band?[{band:r.lte_band,pci:r.lte_pci,rsrp:r.lte_rsrp,rsrq:r.lte_rsrq,serving:true}]:[]),...neighbours.filter(n=>!(n.band===r.lte_band&&n.pci===r.lte_pci))].sort((a,b)=>(b.rsrp??-999)-(a.rsrp??-999));
  for(const n of rows){const tr=document.createElement('tr');for(const value of [n.band+(n.serving?' ●':''),fmt(n.pci),fmt(n.rsrp)+' dBm',fmt(n.rsrq)+' dB',fmt(n.earfcn)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}tbody.append(tr);}
  const small=document.getElementById('dock-neighbours');small.replaceChildren();
  for(const n of rows.filter(n=>!n.serving).slice(0,4)){const line=document.createElement('div');const label=document.createElement('span');label.textContent=`${n.band} · PCI ${fmt(n.pci)}`;const value=document.createElement('b');value.textContent=`${fmt(n.rsrp)} dBm`;line.append(label,value);small.append(line);}
- if(!small.children.length)small.textContent='No neighbouring cells reported';
+ small.hidden=!small.children.length;radioDock.querySelector('.dock-neighbour-title').hidden=small.hidden;
  if(radioRenderedVersion!==radioChangeVersion){
   const target=document.getElementById('radio-changes');target.replaceChildren();
   for(const e of radioChanges.slice(-15).reverse()){
