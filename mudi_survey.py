@@ -120,8 +120,13 @@ def parse_modem(out):
             p = [x.strip('"') for x in ln.split(":", 1)[1].split(",")]
             # "NR5G-NSA",MCC,MNC,PCID,RSRP,SINR,RSRQ,ARFCN,band,DL_bw,scs
             if len(p) >= 10:
-                d.update(rat="NR5G-NSA", nr_pci=num(p[3]), nr_rsrp=num(p[4]), nr_sinr=num(p[5]), nr_band="n" + p[8],
-                         nr_bw=NR_BW.get(int(num(p[9]) or 0), num(p[9])))
+                d.update(rat="NR5G-NSA")
+                # A leg carrying no measurement yet reports PCI 65535 (0xFFFF),
+                # band 0 and dashes. The RAT is real, so keep it; the identity is
+                # not, and recording it invents a cell "n0" no network transmits.
+                if num(p[3]) != 65535 and p[8] != "0":
+                    d.update(nr_pci=num(p[3]), nr_rsrp=num(p[4]), nr_sinr=num(p[5]), nr_band="n" + p[8],
+                             nr_bw=NR_BW.get(int(num(p[9]) or 0), num(p[9])))
         elif ln.startswith('+QENG: "NR5G-SA"'):
             p = [x.strip('"') for x in ln.split(":", 1)[1].split(",")]
             # "NR5G-SA",duplex,MCC,MNC,cellID,PCID,TAC,ARFCN,band,DL_bw,RSRP,RSRQ,SINR,scs,srxlev

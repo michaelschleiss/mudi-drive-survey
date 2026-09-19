@@ -67,6 +67,23 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(mudi_survey.parse_carriers('ERROR'), [])
         self.assertEqual(mudi_survey.parse_modem('ERROR')['ca'], '')
 
+    def test_unmeasured_nr_leg_keeps_the_rat_but_invents_no_cell(self):
+        # Captured verbatim: the NR leg is configured but has no measurement, so
+        # the modem fills PCI with 0xFFFF, band with 0 and every level with "-".
+        r = parse_radio('+QENG: "LTE","FDD",262,02,61F3B13,200,100,1,5,5,BBA2,-105,-8,-76,14,8,170,-\n'
+                        '+QENG: "NR5G-NSA",262,02,65535,-,-,-,0,0,0,8')
+        self.assertEqual(r['rat'], 'NR5G-NSA')          # the RAT is real
+        self.assertIsNone(r['nr_band'])                 # the identity is not
+        self.assertIsNone(r['nr_pci'])
+        self.assertEqual((r['lte_band'], r['lte_rsrp']), ('B1', -105))
+        survey = Survey(':memory:')
+        try:
+            survey.record('gps', {'lat': 48.1, 'lon': 11.2, 'acc_m': 5})
+            survey.record('radio', dict(r, ts=time.time()))
+            self.assertEqual([c['band'] for c in survey.snapshot(0)['cells']], ['B1'])
+        finally:
+            survey.db.close()
+
     def test_position_matches_time_not_average_of_irregular_fixes(self):
         fixes=[fix(100,52),fix(100.1,52.00001),fix(100.2,52.00002),fix(102,52.0002)]
         result=qualify_probe({'mbps':100,'error':''},fixes,100,102)
