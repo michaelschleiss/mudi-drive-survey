@@ -4,7 +4,7 @@
  let observations=[],samples=[],selectedCell='all',selected=null,layer=null,highlight=null,axis='time',lastOptions='';
  const definitions={rsrp:'RSRP · strength',sinr:'SINR · cleanliness',rsrq:'RSRQ · quality',stability:'Stability · RSRP variation',width:'Reported channel width',bands:'Serving band',hunt:'Scouting clues',upload:'Upload tests'};
  const legends={rsrp:'RSRP: red <−110 · amber −110 to −90 · green ≥−90 dBm.',sinr:'SINR: red <5 · amber 5–15 · green ≥15 dB.',rsrq:'RSRQ: red <−16 · amber −16 to −10 · green ≥−10 dB.',stability:'RSRP standard deviation over the preceding 10 s of this cell: green ≤2 · amber ≤5 · red >5 dB. At least 5 readings required. Stable does not mean strong.',width:'Reported channel width: red <10 · amber 10–40 · green ≥40 MHz. Not confirmed uplink bandwidth.',bands:'Colour identifies band. Select a cell to distinguish transmitters on the same band.',hunt:'Green: width ≥20 MHz + RSRP ≥−105 + SINR ≥10 together. Scouting clues, not predicted Mbps.',upload:'Completed upload footprints; cell traces are hidden.'};
- const metricSelect=$('radio-layer');metricSelect.replaceChildren(...Object.entries(definitions).map(([v,l])=>new Option(l,v)));metricSelect.value='rsrp';radioMapMode='rsrp';
+ const metricSelect=$('radio-layer');metricSelect.replaceChildren(...Object.entries(definitions).map(([v,l])=>new Option(l,v)));metricSelect.value='rsrp';radioMapMode='rsrp';radioLayerChosen=true;
  const controls=document.createElement('div');controls.className='track-controls';
  controls.innerHTML='<label>Track layer <select id="track-metric"></select></label><label>Follow a cell <select id="track-cell"><option value="all">All cells</option></select></label><button id="track-fit">Fit observations</button><p id="track-legend"></p>';
  document.querySelector('.map-wrap').before(controls);
@@ -12,7 +12,7 @@
  const cellControl=document.createElement('label');cellControl.className='radio-layer-label';cellControl.textContent='Follow cell ';
  const mapCell=document.createElement('select');mapCell.id='map-cell';mapCell.add(new Option('All cells','all'));cellControl.append(mapCell);$('radio-layer-note').before(cellControl);
  const panel=document.createElement('section');panel.id='track-inspector';panel.hidden=true;
- panel.innerHTML='<div class="track-heading"><strong id="track-title">Cell observations</strong><button id="track-close" aria-label="Close cell inspector">×</button></div><div id="track-detail"></div><label class="track-axis">Chart axis <select id="track-axis"><option value="time">Time</option><option value="distance">Travelled distance</option></select></label><svg id="track-chart" viewBox="0 0 420 235" role="img" aria-label="Selected cell signal charts; click to select a GPS observation"></svg><p id="track-chart-note"></p><p class="track-limit">Timing advance: unavailable / unvalidated. No mast coordinates inferred.</p>';
+ panel.innerHTML='<div class="track-heading"><strong id="track-title">Cell observations</strong><button id="track-close" aria-label="Close cell inspector">×</button></div><div id="track-detail"></div><label class="track-axis">Chart axis <select id="track-axis"><option value="time">Time</option><option value="distance">Travelled distance</option></select></label><svg id="track-chart" viewBox="0 0 420 235" role="img" aria-label="Selected cell signal charts; click to select a GPS observation"></svg><p id="track-chart-note"></p><p class="track-limit">Open Timing evidence to inspect attributed ranges. Locations remain tentative.</p>';
  document.querySelector('.map-card').append(panel);
  // The backend now supplies one timestamp-qualified position per radio observation.
  // Disable the old GPS-triggered painter to avoid duplicated or differently matched points.
@@ -87,11 +87,11 @@
  $('track-fit').onclick=()=>{if(!map)return;const list=samples.filter(matched);if(list.length){setFollow(false);map.fitBounds(L.latLngBounds(list.map(s=>[s.lat,s.lon])),{padding:[50,50],maxZoom:17});}};
  $('fit-route').onclick=$('track-fit').onclick;
  window.consumeTrack=(incoming,reset)=>{
-  if(reset){observations=[];selected=null;}
+  if(reset){observations=[];selected=null;selectedCell='all';lastOptions='';}
   if(!incoming.length&&!reset)return;
   const merged=new Map(observations.map(o=>[o.id,o]));for(const o of incoming)merged.set(o.id,o);
   observations=[...merged.values()].sort((a,b)=>a.ts-b.ts||a.id-b.id).slice(-12000);samples=M.samples(observations);
-  const cells=[...new Map(samples.map(s=>[s.identity,s])).values()];const signature=cells.map(s=>s.identity).join('|');
+  const cells=[...new Map(samples.filter(s=>s.fullIdentity).map(s=>[s.identity,s])).values()];const signature=cells.map(s=>s.identity).join('|');
   if(signature!==lastOptions){lastOptions=signature;for(const el of [$('track-cell'),mapCell]){el.replaceChildren(new Option('All cells','all'),...cells.map(s=>new Option(title(s),s.identity)));el.value=selectedCell;}}
   redraw();renderInspector();
  };

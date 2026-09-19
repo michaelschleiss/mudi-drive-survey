@@ -39,11 +39,11 @@ window.renderDrive=st=>{
   $('drive-best').textContent=(st.cells||[]).reduce((n,c)=>n+c.located,0);
   $('drive-session').textContent=st.config.demo?'SIMULATION':st.running?'● PARKED VERIFICATION':'● CELL HUNT · UPLOADS OFF';
   renderUploadControls();
-  const gps=st.latest.gps, gpsOK=age(gps)<=3&&gps.acc_m<=30;
+  const gps=st.latest.gps, gpsOK=age(gps)<=3&&gps.acc_m<=25;
   const radioOK=age(st.latest.radio)<=Math.max(3,st.config.radio_interval*3)&&!!st.latest.radio.rat;
   const uploadFailure=st.running&&st.latest.probe?.error?`Last upload failed: ${st.latest.probe.error}`:'';
-  $('drive-health').textContent=uploadControlError||(!gpsOK?'GPS unavailable or inaccurate · cells saved without new locations':!radioOK?'GPS recording · modem unavailable':uploadFailure||`GPS ±${fmt(gps.acc_m)} m · ${(st.latest.radio.rat||'').replace('NR5G-','5G ')} · recording`);
-  $('drive-health').classList.toggle('warning',!!uploadControlError||!gpsOK||!radioOK||!!uploadFailure);
+  $('drive-health').textContent=st.error||uploadControlError||(!gpsOK?'GPS unavailable or inaccurate · cells saved without new locations':!radioOK?'GPS recording · modem unavailable':uploadFailure||`GPS ±${fmt(gps.acc_m)} m · ${(st.latest.radio.rat||'').replace('NR5G-','5G ')} · recording`);
+  $('drive-health').classList.toggle('warning',!!st.error||!!uploadControlError||!gpsOK||!radioOK||!!uploadFailure);
   $('drive-location').textContent=watch!=null?$('gps').textContent:'Enable phone GPS';
 };
 window.driveOffline=()=>{
@@ -59,7 +59,7 @@ document.getElementById('radio-layer').dispatchEvent(new Event('change'));
  const sidebar=document.createElement('aside');sidebar.id='hunt-sidebar';
  sidebar.innerHTML='<div class="hunt-heading"><span class="eyebrow">CELL HUNT</span><h2>Choose a cell to follow</h2><p>Compare its signal along your route.</p></div><div id="hunt-list-head"><strong>Recorded cells</strong><span id="hunt-list-count">0</span></div><div id="hunt-inventory-slot"></div><details id="hunt-live-details"><summary>Live modem details</summary></details><details id="hunt-tools"><summary>Parked upload verification</summary><p>Optional: test a promising location after stopping.</p></details>';
  const toolbar=document.createElement('div');toolbar.id='hunt-map-tools';toolbar.innerHTML='<div class="hunt-map-title"><strong>Signal along your route</strong><span id="hunt-selection-caption">All observed cells</span></div><div id="hunt-map-selectors"></div>';
- const empty=document.createElement('div');empty.id='hunt-analysis-empty';empty.innerHTML='<strong>Follow a cell, then inspect its signal.</strong><span>Choose a recorded cell on the left or click a route point. Its measurements and charts will appear here.</span><small>Route points are receiver locations. Mast localization and timing advance are not yet available.</small>';
+ const empty=document.createElement('div');empty.id='hunt-analysis-empty';empty.innerHTML='<strong>Follow a cell, then inspect its signal.</strong><span>Choose a recorded cell on the left or click a route point. Its measurements and charts will appear here.</span><small>Route points are receiver locations. Timing rings require attributed data. Estimated locations are tentative.</small>';
  document.body.append(sidebar,toolbar,empty);
  const home=new Map();
  function move(node,parent){if(!home.has(node)){const marker=document.createComment('layout home');node.before(marker);home.set(node,marker);}parent.append(node);}

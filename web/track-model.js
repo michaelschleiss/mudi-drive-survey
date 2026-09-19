@@ -1,8 +1,12 @@
 (function(root){
 'use strict';
-const key=(r,p)=>r[p+'_cell_id']&&r[p+'_plmn']?`${p}:${r[p+'_plmn']}:${r[p+'_cell_id']}`:`${p}:${r[p+'_plmn']??'None'}:${r[p+'_band']}:${r[p+'_arfcn']??'None'}:${r[p+'_pci']==null?'None':Number(r[p+'_pci']).toFixed(1)}`;
-// Backend JSON numbers have no preserved .0: normalize both sides when comparing signatures.
-const normalize=k=>k.replace(/:(\d+)\.0(?=:|$)/g,':$1');
+const key=(r,p)=>{
+ const plmn=r[p+'_plmn'],id=String(r[p+'_cell_id']??'');
+ if(!/^\d{3}-\d{2,3}$/.test(plmn||'')||!/^(?:0x)?[0-9a-f]+$/i.test(id))return null;
+ const number=Number.parseInt(id,16);if(number>=2**(p==='lte'?28:36))return null;
+ return `${p}:${plmn}:${number.toString(16).toUpperCase()}`;
+};
+const normalize=k=>k;
 const meters=(a,b)=>Math.hypot((a.lat-b.lat)*111320,(a.lon-b.lon)*111320*Math.cos(a.lat*Math.PI/180));
 function samples(observations){
  const windows=new Map(),prev={},result=[];let last=null,distance=0;
@@ -10,13 +14,13 @@ function samples(observations){
   if(last&&o.ts-last.ts<=3&&o.ts>=last.ts)distance+=meters(last,o);last=o;
   for(const p of ['lte','nr']){
    const r=o.radio;if(!r[p+'_band']||r[p+'_pci']==null)continue;
-   const id=normalize(key(r,p)),prior=prev[p],continuous=prior&&o.ts-prior.ts<=3&&o.ts>=prior.ts;
+   const fullKey=key(r,p),id=fullKey||`unknown:${o.id}:${p}`,prior=prev[p],continuous=prior&&o.ts-prior.ts<=3&&o.ts>=prior.ts;
    let window=windows.get(id)||[];if(!continuous||prior.identity!==id)window=[];
    window=window.filter(s=>o.ts-s.ts<=10);
    if(r[p+'_rsrp']!=null)window.push({ts:o.ts,value:r[p+'_rsrp']});windows.set(id,window);
    const mean=window.length?window.reduce((a,b)=>a+b.value,0)/window.length:0;
    const stability=window.length>=5?Math.sqrt(window.reduce((a,b)=>a+(b.value-mean)**2,0)/window.length):null;
-   const s={...o,segment:continuous&&prior.identity===id?prior.segment:`${p}:${o.id}`,prefix:p,identity:id,band:r[p+'_band'],pci:r[p+'_pci'],cell_id:r[p+'_cell_id'],plmn:r[p+'_plmn'],channel:r[p+'_arfcn'],rsrp:r[p+'_rsrp']??null,sinr:r[p+'_sinr']??null,rsrq:r[p+'_rsrq']??null,width:r[p+'_bw']??null,stability,distance,change:!!(continuous&&prior.identity!==id),from:continuous?prior.identity:null};
+   const s={...o,segment:continuous&&prior.identity===id?prior.segment:`${p}:${o.id}`,prefix:p,identity:id,fullIdentity:!!fullKey,band:r[p+'_band'],pci:r[p+'_pci'],cell_id:r[p+'_cell_id'],plmn:r[p+'_plmn'],channel:r[p+'_arfcn'],rsrp:r[p+'_rsrp']??null,sinr:r[p+'_sinr']??null,rsrq:r[p+'_rsrq']??null,width:r[p+'_bw']??null,stability,distance,change:!!(continuous&&fullKey&&prior.fullIdentity&&prior.identity!==id),from:continuous?prior.identity:null};
    result.push(s);prev[p]=s;
   }
  }

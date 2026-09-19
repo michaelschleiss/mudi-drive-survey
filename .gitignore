@@ -3,3 +3,7 @@ __pycache__/
 *.sqlite3-wal
 *.sqlite3-shm
 .DS_Store
+node_modules/
+test-results/
+data/
+*.pem

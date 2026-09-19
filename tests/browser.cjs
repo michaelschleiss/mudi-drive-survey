@@ -1,0 +1,64 @@
+const {chromium}=require('playwright');
+const {spawn}=require('node:child_process');
+const fs=require('node:fs');
+const assert=require('node:assert/strict');
+(async()=>{
+ const port=18789,server=spawn('python3',['drive_app.py','--demo','--host','127.0.0.1','--port',String(port)],{stdio:['ignore','pipe','pipe']});
+ let browser;const logs=[];server.stderr.on('data',d=>logs.push(d.toString()));
+ try{
+  await new Promise((resolve,reject)=>{server.stdout.once('data',resolve);server.once('exit',c=>reject(Error(`server ${c}: ${logs.join('')}`)));setTimeout(()=>reject(Error('startup timeout')),10000).unref();});
+  const chrome=process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  browser=await chromium.launch({headless:true,...(fs.existsSync(chrome)?{executablePath:chrome}:{})});
+  const page=await browser.newPage({viewport:{width:1440,height:1050}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(`http://127.0.0.1:${port}`);
+  await page.waitForFunction(()=>document.querySelectorAll('.cell-candidate').length>=3);
+  assert.equal(await page.locator('body').getAttribute('data-view'),'map');
+  assert.equal(await page.locator('#drive-pause').isDisabled(),true);
+  const before=await page.evaluate(()=>fetch('/api/state').then(r=>r.json()));
+  await page.waitForTimeout(800);
+  const after=await page.evaluate(()=>fetch('/api/state').then(r=>r.json()));
+  assert.ok(after.latest.gps.id>before.latest.gps.id);assert.equal(after.running,false);assert.equal(after.bytes,0);
+  assert.equal(after.cells.filter(c=>c.identity.startsWith('nr:')).length,2);
+  const keys=after.cells.filter(c=>c.identity.startsWith('nr:')).map(c=>c.identity);
+  for(const key of keys){
+   await page.locator('#map-cell').selectOption(key);
+   await page.waitForFunction(k=>window.TrackUI?.selectedCell===k,key);
+   assert.equal(await page.locator('#track-inspector').isVisible(),true);
+   const detail=await page.evaluate(k=>fetch('/api/cell?key='+encodeURIComponent(k)).then(r=>r.json()),key);
+   assert.ok(detail.rings.length>0);assert.ok(detail.rings.every(r=>r.key===key));
+  }
+  await page.locator('#map-cell').selectOption(keys[0]);
+  await page.locator('#evidence-panel summary').click();
+  await page.waitForFunction(()=>document.getElementById('evidence-status').textContent.includes('Tentative'));
+  await page.locator('#evidence-at').fill('0');
+  await page.waitForFunction(()=>document.getElementById('evidence-count').textContent==='1 rings');
+  assert.match(await page.locator('#evidence-status').textContent(),/at least four/);
+  await page.locator('#evidence-live').click();
+  await page.waitForFunction(()=>document.getElementById('evidence-status').textContent.includes('Tentative'));
+  await page.locator('#evidence-rings').uncheck();await page.locator('#evidence-rings').check();
+  await page.locator('#evidence-fit').click();
+  for(const metric of ['rsrq','width','stability','rsrp'])await page.locator('#radio-layer').selectOption(metric);
+  await page.locator('#track-axis').selectOption('distance');
+  assert.ok(await page.locator('#track-chart path').count()>=3);
+  const csv=await page.evaluate(()=>fetch('/api/export').then(r=>r.text()));assert.ok(csv.includes('timing'));assert.ok(csv.includes('cell_observations'));
+  fs.mkdirSync('test-results',{recursive:true});
+  await page.waitForTimeout(1200);
+  await page.screenshot({path:'test-results/desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.evaluate(()=>setViewMode('phone'));await page.waitForTimeout(300);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Phone overflow');
+  await page.screenshot({path:'test-results/mobile.png',fullPage:true});
+  await page.evaluate(()=>setViewMode('map'));await page.waitForTimeout(500);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile map overflow');
+  await page.screenshot({path:'test-results/mobile-map.png',fullPage:true});
+  const empty={...after,instance:'restarted',latest:{},events:[],observations:[],cells:[],unresolved:[],best:[],cursor:0,reset:true,ring_count:0};
+  await page.route('**/api/state?*',r=>r.fulfill({json:empty}));
+  await page.waitForFunction(()=>document.querySelectorAll('.cell-candidate').length===0);
+  assert.equal(await page.locator('#track-inspector').isVisible(),false);
+  await page.route('**/api/state?*',r=>r.abort());
+  await page.waitForTimeout(1000);
+  assert.match(await page.locator('#connection').textContent(),/OFFLINE/);
+  assert.deepEqual(errors,[]);assert.equal(logs.join(''),'');
+  console.log('PASS: passive drive, identity isolation, all radio map layers, linked charts, timing replay, candidate fit, export, desktop/mobile, restart and offline');
+ }finally{if(browser)await browser.close();server.kill('SIGINT');}
+})().catch(e=>{console.error(e);process.exitCode=1;});

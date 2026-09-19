@@ -9,13 +9,16 @@ import math
 import os
 import re
 from pathlib import Path
-import sqlite3
 import ssl
 import statistics
 import subprocess
 import tempfile
 import threading
 import time
+import uuid
+
+from survey_core import Journal
+from cell_evidence import CellRegistry, identity, load_sites, localization_worker, fit_rings, match_sites
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -106,9 +109,11 @@ def hunt_priority(width, rsrp, sinr):
 class Survey:
     def __init__(self, db):
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(db, check_same_thread=False)
-        self.db.execute('PRAGMA journal_mode=WAL')
-        self.db.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, kind TEXT, ts REAL, data TEXT)')
+        self.journal = Journal(db)
+        self.db = self.journal  # Existing callers may still close the recorder through this alias.
+        self.evidence = CellRegistry()
+        self.sites = []
+        self.instance = uuid.uuid4().hex
         self.events = deque(maxlen=12000)
         self.fixes = deque(maxlen=600)
         self.latest = {}
@@ -125,9 +130,9 @@ class Survey:
         self.remaining = 0
         self.active = None
         self.generation = 0
-        for seq, kind, ts, data in self.db.execute('SELECT id,kind,ts,data FROM events ORDER BY id'):
-            self.seq = seq
-            self._remember({'id': seq, 'kind': kind, 'ts': ts, **json.loads(data)})
+        for event in self.journal.history():
+            self.seq = event['id']
+            self._remember(event)
 
     def _remember(self, event):
         self.events.append(event)
@@ -135,8 +140,22 @@ class Survey:
         self.latest[kind] = event
         if kind == 'gps':
             self.fixes.append(event)
-        if kind == 'radio' and event.get('rat'):
+        if kind == 'radio':
+            packet = {'ts': event.get('sample_ts', event['ts']), 'latency_ms': event.get('poll_ms', 0)}
+            for prefix, rat in (('lte', 'LTE'), ('nr', 'NR')):
+                if event.get(prefix+'_band'):
+                    packet[prefix] = {'radio':rat, 'plmn':event.get(prefix+'_plmn'),
+                        'cell':event.get(prefix+'_cell_id'), 'band':event[prefix+'_band'],
+                        'pci':event.get(prefix+'_pci'), 'arfcn':event.get(prefix+'_arfcn'),
+                        'rsrp':event.get(prefix+'_rsrp'), 'rsrq':event.get(prefix+'_rsrq'),
+                        'bandwidth_mhz':event.get(prefix+'_bw')}
+            if 'cell_observations' not in event:
+                event['cell_observations'] = self.evidence.observations_for(packet,
+                    [dict(p, accuracy=p['acc_m']) for p in self.fixes])
+            self.evidence.remember_radio({'id':event['id'], 'observations':event['cell_observations']})
             self._remember_cells(event)
+        if kind == 'timing':
+            self.evidence.remember_timing(event)
         if kind == 'probe':
             self.bytes += event.get('bytes', 0)
             if event.get('eligible') or (event.get('error') and event.get('location_eligible')):
@@ -153,12 +172,13 @@ class Survey:
                 spot.update(ts=event['ts'], rat=event.get('rat'), ca=event.get('ca'))
 
     def _remember_cells(self, radio):
-        gps = self.latest.get('gps')
-        located = bool(gps and abs(radio['ts']-gps['ts']) <= 3 and gps['acc_m'] <= 30)
+        sample_ts = radio.get('sample_ts', radio['ts'])
+        gps = min(self.fixes, key=lambda p: abs(p['ts']-sample_ts), default=None)
+        located = bool(gps and abs(sample_ts-gps['ts']) <= 1.5 and gps['acc_m'] <= 25 and radio.get('poll_ms',0) <= 1500)
         if located:
             fields = {k: v for k, v in radio.items() if k.startswith(('lte_', 'nr_')) or k in ('rat', 'ca', 'ca_ts')}
-            self.radio_track.append({'id': radio['id'], 'ts': radio['ts'],
-                'gps_ts': gps['ts'], 'gps_delta_s': radio['ts']-gps['ts'],
+            self.radio_track.append({'id': radio['id'], 'ts': sample_ts,
+                'gps_ts': gps['ts'], 'gps_delta_s': sample_ts-gps['ts'],
                 'lat': gps['lat'], 'lon': gps['lon'], 'acc_m': gps['acc_m'], 'radio': fields})
         for prefix in ('lte', 'nr'):
             band, pci = radio.get(prefix+'_band'), radio.get(prefix+'_pci')
@@ -167,16 +187,18 @@ class Survey:
             plmn = radio.get(prefix+'_plmn')
             channel = radio.get(prefix+'_arfcn')
             full_id = radio.get(prefix+'_cell_id')
-            # NSA does not expose NR global identity here: never call PCI a mast ID.
-            identity = f'{prefix}:{plmn}:{full_id}' if full_id and plmn else f'{prefix}:{plmn}:{band}:{channel}:{pci}'
-            if identity not in self.cells:
-                self.cells[identity] = {'identity': identity, 'band': band, 'pci': pci,
+            cell_key = identity({'radio':prefix.upper(), 'plmn':plmn, 'cell':full_id})
+            if not cell_key:
+                continue  # Unknown sightings stay in the raw/track history, not a fictional unique cell.
+            full_id = cell_key.rsplit(':',1)[1]
+            if cell_key not in self.cells:
+                self.cells[cell_key] = {'identity': cell_key, 'band': band, 'pci': pci,
                     'plmn': plmn, 'cell_id': full_id, 'channel': channel,
                     'identity_quality': 'Cell ID' if full_id and plmn else 'Radio signature (may repeat)',
                     'first_seen': radio['ts'], 'observations': 0, 'located': 0,
                     'best_position': None, 'candidate_position': None, 'hunt_priority': 0, 'best_rsrp': None, 'best_sinr': None}
-            cell = self.cells[identity]
-            cell.update(last_seen=radio['ts'], bandwidth_mhz=radio.get(prefix+'_bw'),
+            cell = self.cells[cell_key]
+            cell.update(last_seen=radio['ts'], band=band, pci=pci, channel=channel, bandwidth_mhz=radio.get(prefix+'_bw'),
                         tac=radio.get(prefix+'_tac'))
             cell['observations'] += 1
             rsrp, sinr = radio.get(prefix+'_rsrp'), radio.get(prefix+'_sinr')
@@ -194,23 +216,21 @@ class Survey:
                     cell['hunt_priority'] = priority
                     cell['candidate_position'] = {k: gps[k] for k in ('lat', 'lon', 'acc_m', 'ts')}
                     cell['candidate_position'].update(rank=list(rank), rsrp=rsrp, sinr=sinr,
-                        radio_ts=radio['ts'], bandwidth_mhz=width, ca=radio.get('ca'),
+                        radio_ts=sample_ts, bandwidth_mhz=width, ca=radio.get('ca'),
                         lte_anchor=radio.get('lte_cell_id'), lte_anchor_band=radio.get('lte_band'))
                 best = cell['best_position']
                 if best is None or (rsrp is not None and (best.get('rsrp') is None or rsrp > best['rsrp'])):
                     cell['best_position'] = {k: gps[k] for k in ('lat', 'lon', 'acc_m', 'ts')}
-                    cell['best_position'].update(rsrp=rsrp, sinr=sinr, radio_ts=radio['ts'])
+                    cell['best_position'].update(rsrp=rsrp, sinr=sinr, radio_ts=sample_ts)
 
     def record(self, kind, data):
         with self.lock:
             data = dict(data)
             data.setdefault('ts', time.time())
-            cur = self.db.execute('INSERT INTO events(kind,ts,data) VALUES (?,?,?)',
-                                  (kind, data['ts'], json.dumps(data, allow_nan=False)))
-            self.db.commit()
-            self.seq = cur.lastrowid
+            self.seq += 1
             event = {**data, 'kind': kind, 'id': self.seq}
             self._remember(event)
+            self.journal.append(event)
             return event
 
     def gps(self, data):
@@ -219,8 +239,26 @@ class Survey:
             old = self.latest.get('gps')
             if old and p['ts'] <= old['ts']:
                 return False
+            if old and p['source'] != old.get('source') and time.time()-old['ts'] < 3 and p['acc_m'] > old['acc_m']:
+                return False
             self.record('gps', p)
         return True
+
+    def timing(self, payload):
+        with self.lock:
+            result = self.evidence.validate_timing(payload, [dict(p, accuracy=p['acc_m']) for p in self.fixes])
+            rings = self.evidence.cells[result['key']]['rings']
+            if rings and result['ts'] <= rings[-1]['ts']:
+                return False
+            self.record('timing', result)
+            return True
+
+    def require_parked(self):
+        gps = self.latest.get('gps', {})
+        if self.journal.error:
+            raise ValueError(self.journal.error)
+        if time.time()-gps.get('ts',0) > 3 or gps.get('speed_kmh') is None or gps['speed_kmh'] > 3 or gps.get('acc_m',999) > 25:
+            raise ValueError('Park first: verification requires fresh GPS, accuracy ≤25 m and speed ≤3 km/h')
 
     def snapshot(self, since):
         with self.lock:
@@ -237,12 +275,17 @@ class Survey:
                     'track_limit': self.radio_track.maxlen, 'latest': dict(self.latest), 'events': [e for e in self.events if reset or e['id'] > since],
                     'cells': sorted((dict(c) for c in self.cells.values()), key=lambda c: (c.get('hunt_priority', 0), bool(c.get('candidate_position')), (c.get('candidate_position') or {}).get('sinr') if (c.get('candidate_position') or {}).get('sinr') is not None else -999, c.get('bandwidth_mhz') or 0), reverse=True),
                     'cursor': self.seq, 'reset': reset, 'best': best[:20], 'running': self.running,
-                    'busy': self.busy, 'mode': self.mode, 'remaining': self.remaining, 'active': self.active, 'error': self.error, 'bytes': self.bytes, 'started': self.started}
+                    'busy': self.busy, 'mode': self.mode, 'remaining': self.remaining, 'active': self.active, 'error': self.journal.error or self.error,
+                    'instance': self.instance, 'storage': {'saved':self.journal.saved, 'error':self.journal.error},
+                    'unresolved':list(self.evidence.unresolved), 'ring_count':self.evidence.ring_count, 'site_count':len(self.sites), 'bytes': self.bytes, 'started': self.started}
 
 
 def parse_radio(out):
     # Standalone LTE/SA may embed the RAT after servingcell and state;
     # NSA emits separate LTE and NR5G-NSA lines. Normalize both forms.
+    raw = out
+    state_match = re.search(r'\"servingcell\",\"([^\"]+)\"',out)
+    rrc = state_match.group(1) if state_match else None
     out = re.sub(r'(\+QENG:\s*)"servingcell","[^"]+",("(?:LTE|NR5G-SA)",)', r'\1\2', out)
     parsed = parse_modem(out)
     for line in out.splitlines():
@@ -260,7 +303,14 @@ def parse_radio(out):
             parsed.update(nr_plmn=fields[2]+'-'+fields[3], nr_cell_id=fields[4].upper(),
                           nr_tac=fields[6].upper(), nr_arfcn=mudi_survey.num(fields[7]),
                           nr_rsrq=mudi_survey.num(fields[11]))
-    parsed['raw_radio'] = out
+    parsed['rrc'] = rrc
+    parsed['nr_bw_raw'] = parsed.get('nr_bw')
+    if rrc != 'CONNECT':
+        parsed['nr_bw'] = None
+    for prefix in ('lte','nr'):
+        parsed[prefix+'_sinr_raw'] = parsed.get(prefix+'_sinr')
+        parsed[prefix+'_sinr'] = None  # Firmware encoding has not been calibrated.
+    parsed['raw_radio'] = raw
     return parsed
 
 
@@ -268,20 +318,19 @@ def radio_worker(survey, stop, interval):
     count = 0
     while not stop.is_set():
         start = time.monotonic()
-        commands = ['AT+QENG="servingcell"']
-        if count % 5 == 0:
-            commands += ['AT+QCAINFO', 'AT+QENG="neighbourcell"']
-        out = router(commands)
+        out = router(['AT+QENG="servingcell"'])
         d = parse_radio(out)
+        d.update(poll_ms=round((time.monotonic()-start)*1000),
+                 sample_ts=time.time()-(time.monotonic()-start)/2,
+                 error='' if d['rat'] else 'No modem response / no serving cell')
         with survey.lock:
-            previous = survey.latest.get('radio', {})
-        if count % 5:
+            context = survey.latest.get('radio_context', {})
             for k in ('ca', 'neighbours', 'n_carriers', 'ca_ts'):
-                d[k] = previous.get(k)
-        if count % 5 == 0:
-            d['ca_ts'] = time.time()
-        d.update(poll_ms=round((time.monotonic()-start)*1000), error='' if d['rat'] else 'No modem response / no serving cell')
+                d[k] = context.get(k)
         survey.record('radio', d)
+        if count % 5 == 0 and not stop.is_set():
+            context = parse_radio(router(['AT+QCAINFO', 'AT+QENG="neighbourcell"']))
+            survey.record('radio_context', {k:context.get(k) for k in ('ca','neighbours','n_carriers','raw_radio')} | {'ca_ts':time.time()})
         count += 1
         stop.wait(max(.05, interval-(time.monotonic()-start)))
 
@@ -394,7 +443,8 @@ def upload_batch(url, iface, size, path, method, target, progress=None):
         rates = [float(r['size_upload'])*8/1e6/float(r['time_total'])
                  for r in measured if float(r.get('time_total', 0)) > 0]
         return {'mbps': sent*8/1e6/seconds if seconds else None,
-                'bytes': sum(int(r.get('size_upload', 0)) for r in records),
+                'bytes': sum(int(r.get('size_upload', 0)) for r in records) if valid else size*count+262144,
+                'bytes_estimated': not valid,
                 'payload_bytes': sent, 'transfer_seconds': seconds,
                 'measurement_start': measured_start or start,
                 'setup_seconds': float(records[0].get('time_pretransfer', 0)) if records else None,
@@ -410,7 +460,7 @@ def upload_batch(url, iface, size, path, method, target, progress=None):
                     else 'Upload batch exceeded its time limit' if timed_out.is_set()
                     else f'Upload batch incomplete or rejected (HTTP {int(records[-1].get("http_code", 0)) if records else 0}, curl {rc})')}
     except (OSError, ValueError, KeyError):
-        return {'mbps': None, 'bytes': 0, 'error': 'Upload batch failed'}
+        return {'mbps': None, 'bytes': size*count+262144, 'bytes_estimated':True, 'error': 'Upload batch failed'}
 
 
 def probe_worker(survey, stop, config):
@@ -426,6 +476,24 @@ def probe_worker(survey, stop, config):
                 continue
             start = time.time()
             with survey.lock:
+                try:
+                    survey.require_parked()
+                except ValueError as exc:
+                    survey.running = False
+                    survey.remaining = 0
+                    survey.error = str(exc)
+                    survey.record('notice', {'message':str(exc)})
+                    continue
+                if not survey.running or survey.mode != 'parked':
+                    continue
+                remaining_bytes = int(getattr(config,'budget_mb',2048)*1048576)-survey.bytes
+                if remaining_bytes < 9*262144:
+                    survey.running=False
+                    survey.remaining=0
+                    survey.error='Upload payload budget reached. Passive recording continues.'
+                    survey.record('notice',{'message':survey.error})
+                    continue
+                size=min(size,(remaining_bytes-262144-64)//8)
                 mode, generation = survey.mode, survey.generation
                 target = 20 if mode == 'parked' else 5
                 survey.busy = True
@@ -460,22 +528,48 @@ def probe_worker(survey, stop, config):
 
 
 def demo_worker(survey, stop):
-    i = 0
+    """Synthetic full identities, reused PCI, unresolved NSA, and labelled TA evidence."""
+    from survey_core import meters
+    towers = {'lte:262-01:ABC':{'lat':52.5125,'lon':13.387},
+              'nr:262-01:1234001':{'lat':52.5189,'lon':13.395},
+              'nr:262-01:1234002':{'lat':52.514,'lon':13.399}}
+    if not survey.sites:
+        survey.sites = [dict(p,id='DEMO-'+str(i+1),operator='262-01',uncertainty_m=80,
+                            source='Synthetic site; not BNetzA') for i,p in enumerate(towers.values())]
+    def step(i, stamp):
+        phase=i%360/360*math.tau
+        p={'lat':52.5156+.0028*math.sin(phase),'lon':13.392+.0048*math.cos(phase),
+           'ts':stamp,'acc_m':5,'speed_kmh':31,'source':'simulation'}
+        survey.record('gps',p)
+        nci='1234001' if i%360<220 else '1234002'
+        missing=100<i%360<130
+        rsrp=round(-65-20*math.log10(max(1,meters(p,towers['nr:262-01:'+nci])/70)),1)
+        r={'ts':stamp,'sample_ts':stamp,'rrc':'CONNECT','rat':'NR5G-NSA' if missing else 'NR5G-SA',
+           'nr_band':'n78','nr_plmn':'262-01','nr_cell_id':None if missing else nci,'nr_pci':641,
+           'nr_arfcn':630000 if nci=='1234001' else 640000,'nr_bw':100 if nci=='1234001' else 80,
+           'nr_rsrp':rsrp,'nr_rsrq':-10,'nr_sinr':24,'sinr_encoding':'synthetic dB',
+           'poll_ms':87,'ca':'B3(20)+n78(100)' if missing else 'n78(100)', 'ca_ts':stamp,
+           'neighbours':[{'band':'B3','pci':219,'earfcn':1300,'rsrp':-98,'rsrq':-13}]}
+        if missing:
+            r.update(lte_band='B3',lte_plmn='262-01',lte_cell_id='ABC',lte_pci=218,lte_arfcn=1300,
+                     lte_bw=20,lte_rsrp=-86,lte_rsrq=-10,lte_sinr=18)
+        event=survey.record('radio',r)
+        if i%12==0:
+            for o in event['cell_observations']:
+                if not o.get('key'):continue
+                scs=30 if o['radio']=='NR' else 15
+                step_m=299792458*16/(15000*2048)/2*15/scs
+                index=round(meters(p,towers[o['key']])/step_m)
+                survey.record('timing',dict(lat=p['lat'],lon=p['lon'],accuracy=5,ts=stamp,
+                    key=o['key'],reference_key=o['key'],ta_index=index,scs_khz=scs,
+                    encoding='nr-absolute-rar' if scs==30 else 'lte-absolute-16ts',
+                    distance_m=index*step_m,step_m=step_m,uncertainty_m=step_m+55,
+                    source='Synthetic timing advance',range_error_m=50))
+    start=time.time()-180
+    for i in range(360):step(i,start+i*.5)
+    i=0
     while not stop.is_set():
-        t = time.time()
-        p = {'lat': 52.515+i*.000009, 'lon': 13.39+math.sin(i/40)*.002,
-             'ts': t, 'acc_m': 5, 'speed_kmh': 24, 'source': 'simulation'}
-        survey.gps(p)
-        speed = 45+100*(1+math.sin(i/30))/2
-        survey.record('radio', {'rat': 'NR5G-NSA', 'ca': 'B3(20)+n78(100)', 'lte_rsrp': -85,
-                               'lte_sinr': 19, 'nr_rsrp': -79, 'nr_sinr': 25, 'poll_ms': 94})
-        survey.record('traffic', {'mbps': speed if survey.running else 0})
-        if survey.running and i % 4 == 0:
-            survey.record('probe', {**p, 'start': t-2, 'duration': 2, 'mbps': speed,
-                                    'bytes': int(speed*1e6/8*2), 'eligible': True, 'reason': '',
-                                    'footprint_m': 14, 'rat': 'NR5G-NSA', 'ca': 'B3(20)+n78(100)'})
-        i += 1
-        stop.wait(.5)
+        step(i,time.time());i+=1;stop.wait(.5)
 
 
 def handler(survey, config):
@@ -506,20 +600,43 @@ def handler(survey, config):
                     return self.reply({'error': 'Invalid cursor'}, 400)
                 data = survey.snapshot(since)
                 data['config'] = {'demo': config.demo, 'upload_ready': bool(config.upload_url) or config.demo,
-                                  'probe_every': config.probe_every, 'radio_interval': config.radio_interval,
+                                  'probe_every': config.probe_every, 'radio_interval': config.radio_interval, 'budget_mb':getattr(config,'budget_mb',2048),
                                   'iface': config.iface, 'drive_seconds': 5, 'parked_seconds': 20}
                 self.reply(data)
+            elif url.path == '/api/cell':
+                try:
+                    with survey.lock:
+                        detail = survey.evidence.detail(parse_qs(url.query).get('key',[''])[0])
+                    at = parse_qs(url.query).get('at',[None])[0]
+                    if at is not None:
+                        stamp = float(at)
+                        if not math.isfinite(stamp):
+                            raise ValueError('Invalid replay time')
+                        detail['rings'] = [r for r in detail['rings'] if r['ts'] <= stamp]
+                        detail['history'] = [r for r in detail['history'] if r['ts'] <= stamp]
+                        detail['estimate'] = fit_rings(detail['rings'])
+                        detail['matches'] = match_sites(detail['rings'], survey.sites, detail['key'])
+                        detail['trail'] = [v for v in detail.get('trail',[]) if v['ts'] <= stamp]
+                    self.reply(detail)
+                except ValueError:
+                    self.reply({'error':'Invalid replay time'},400)
+                except KeyError:
+                    self.reply({'error':'Unknown full cell identity'},404)
             elif url.path == '/api/export':
                 out = io.StringIO()
                 writer = csv.writer(out)
                 writer.writerow(['id', 'kind', 'ts', 'data_json'])
                 with survey.lock:
-                    writer.writerows(survey.db.execute('SELECT id,kind,ts,data FROM events ORDER BY id'))
+                    cutoff, tail = survey.seq, list(survey.events)
+                records = [e for e in survey.journal.history() if e['id'] <= cutoff]
+                last = records[-1]['id'] if records else 0
+                records.extend(e for e in tail if last < e['id'] <= cutoff)
+                writer.writerows((e['id'],e['kind'],e['ts'],json.dumps(e)) for e in records)
                 self.reply(out.getvalue().encode(), mime='text/csv')
             else:
                 files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
                          '/views.js': 'views.js', '/views.css': 'views.css',
-                         '/radio.js': 'radio.js', '/track-model.js': 'track-model.js', '/track.js': 'track.js', '/track.css': 'track.css',
+                         '/radio.js': 'radio.js', '/track-model.js': 'track-model.js', '/track.js': 'track.js', '/track.css': 'track.css', '/evidence.js':'evidence.js', '/evidence.css':'evidence.css',
                          '/leaflet.js': 'leaflet.js', '/leaflet.css': 'leaflet.css'}
                 name = files.get(url.path)
                 if not name or not (ROOT/'web'/name).exists():
@@ -542,6 +659,10 @@ def handler(survey, config):
                 if self.path == '/api/pos':
                     accepted = survey.gps(p)
                     return self.reply({'ok': True, 'accepted': accepted})
+                if self.path == '/api/timing':
+                    if config.demo:
+                        raise ValueError('Live timing input is disabled in simulation')
+                    return self.reply({'ok':True,'accepted':survey.timing(p)})
                 if self.path == '/api/control':
                     if not isinstance(p.get('running'), bool):
                         raise ValueError('running must be a boolean')
@@ -549,8 +670,12 @@ def handler(survey, config):
                         raise ValueError('Configure an accepting HTTPS upload endpoint first')
                     with survey.lock:
                         mode = p.get('mode', survey.mode)
-                        if mode not in ('drive', 'parked'):
-                            raise ValueError('mode must be drive or parked')
+                        if mode != 'parked':
+                            raise ValueError('Driving stays passive; only parked verification is supported')
+                        if p['running']:
+                            survey.require_parked()
+                            if survey.busy or survey.running:
+                                raise ValueError('Verification already active')
                         if survey.busy and mode != survey.mode:
                             raise ValueError('Pause and wait for the current test to finish before switching modes')
                         survey.generation += 1
@@ -571,7 +696,9 @@ def main():
     ap.add_argument('--host', default='0.0.0.0')
     ap.add_argument('--db', default='survey.sqlite3')
     ap.add_argument('--demo', action='store_true')
-    ap.add_argument('--radio-interval', type=float, default=1)
+    ap.add_argument('--radio-interval', type=float, default=.75)
+    ap.add_argument('--budget-mb',type=int,default=2048,help='Session upload payload budget in MiB')
+    ap.add_argument('--sites', help='Optional CSV/JSON/GeoJSON mast candidates')
     ap.add_argument('--probe-every', type=float, default=1, help='Pause in seconds after each upload batch')
     ap.add_argument('--upload-url', default=os.environ.get('ATLAS_UPLOAD_URL', 'https://speed.cloudflare.com/__up'))
     ap.add_argument('--upload-method', choices=['POST', 'PUT'], default='POST')
@@ -581,8 +708,8 @@ def main():
     ap.add_argument('--phone-profile', help='Public iPhone certificate profile to serve')
     ap.add_argument('--ssh-known-hosts', help='Known-hosts file for the Mudi SSH connection')
     config = ap.parse_args()
-    if config.radio_interval < .25 or config.probe_every < 1:
-        ap.error('Minimum radio interval: 0.25 s; minimum probe period: 1 s')
+    if config.radio_interval < .25 or config.probe_every < 1 or config.budget_mb < 1:
+        ap.error('Minimum radio interval: 0.25 s; minimum probe period: 1 s; budget: 1 MiB')
     if config.upload_url and urlparse(config.upload_url).scheme != 'https':
         ap.error('Upload URL must use HTTPS')
     if bool(config.tls_cert) != bool(config.tls_key):
@@ -592,6 +719,7 @@ def main():
     if config.ssh_known_hosts:
         mudi_survey.SSH[1:1] = ['-o', 'UserKnownHostsFile='+config.ssh_known_hosts]
     survey = Survey(':memory:' if config.demo else config.db)
+    survey.sites = load_sites(config.sites)
     stop = threading.Event()
     server = ThreadingHTTPServer((config.host, config.port), handler(survey, config))
     https_server = None
@@ -609,6 +737,7 @@ def main():
         (traffic_worker, (survey, stop, config.iface))]
     if config.upload_url and not config.demo:
         jobs.append((probe_worker, (survey, stop, config)))
+    jobs.append((localization_worker, (survey, stop)))
     threads = []
     for fn, params in jobs:
         thread = threading.Thread(target=fn, args=params, daemon=True)

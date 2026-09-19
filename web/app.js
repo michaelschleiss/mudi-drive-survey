@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const fmt = (v, digits=0) => v == null ? '—' : Number(v).toFixed(digits);
 const age = p => p ? Math.max(0, Date.now()/1000-p.ts) : Infinity;
 const color = v => v == null ? '#899588' : v < 40 ? '#cf735b' : v < 80 ? '#dcbf65' : v < 150 ? '#57b59c' : '#1e7766';
+let recorderInstance=null,recorderOnline=false;
 let cursor=0, state=null, follow=true, watch=null, history=[], latestValid=null, lastGps=null, first=true, markers=[];
 let map=null, tiles=null, track=null, tests=null, spots=null, me=null, accuracy=null;
 let recordedTests=[];
@@ -15,7 +16,8 @@ function renderUploadControls(){
   for(const id of ['upload-mode','drive-mode']){$(id).value=selectedUploadMode;$(id).disabled=running||!!state?.busy||uploadControlPending;}
   for(const id of ['toggle','drive-pause']){
     const button=$(id);if(!button)continue;
-    button.disabled=uploadControlPending||!state||(!running&&!!state.busy);
+    const gps=state?.latest.gps;
+    button.disabled=!recorderOnline||uploadControlPending||!state||(!running&&(!!state.busy||state.config.demo||!!state.storage?.error||age(gps)>3||gps?.speed_kmh==null||gps.speed_kmh>3||gps.acc_m>25));
     button.textContent=uploadControlPending?(uploadControlTarget?'Starting uploads…':'Pausing uploads…'):(running?'Pause uploads Ⅱ':state?.busy?'Finishing current test…':selectedUploadMode==='parked'?'Verify parked spot ↗':'Start uploads ↗');
   }
 }
@@ -108,25 +110,25 @@ function render(st){
   $('usage').textContent=`${fmt(st.bytes/1048576,1)} MB test data sent`;
   $('network').textContent=radioFresh?(radio.rat||'No serving cell').replace('NR5G-','5G '):'Radio unavailable';
   $('carriers').textContent=radioFresh?(radio.ca||'Carrier details pending'):'Waiting for fresh modem data';
-  const is5g=radioFresh && radio.nr_sinr!=null;
+  const is5g=radioFresh && radio.nr_band!=null;
   $('sinr').parentElement.firstChild.textContent=is5g?'5G SINR ':'LTE SINR ';
   $('rsrp').parentElement.firstChild.textContent=is5g?'5G RSRP ':'LTE RSRP ';
   $('sinr').textContent=radioFresh?`${fmt(is5g?radio.nr_sinr:radio.lte_sinr)} dB`:'—';
   $('rsrp').textContent=radioFresh?`${fmt(is5g?radio.nr_rsrp:radio.lte_rsrp)} dBm`:'—';
   $('accuracy').textContent=gpsFresh?fmt(gps.acc_m):'—';
-  $('gps-dot').style.background=gpsFresh&&gps.acc_m<=30?'#65a477':'#bd684d';
+  $('gps-dot').style.background=gpsFresh&&gps.acc_m<=25?'#65a477':'#bd684d';
   $('gps-detail').textContent=gps?`${gps.source} · fix ${fmt(age(gps),1)} s ago${gpsFresh?'':' · STALE'}`:'Waiting for a location source';
   $('sample-count').textContent=`${st.cursor.toLocaleString()} observations`;
   $('speed').textContent=`${gpsFresh?fmt(gps.speed_kmh):'—'} km/h`;
   $('radio-age').textContent=radio?`Radio ${fmt(age(radio),1)} s ago · poll ${fmt(radio.poll_ms)} ms`:'Radio: waiting';
   $('cadence').textContent=`GPS on every fix · radio target ${st.config.radio_interval} s · ${st.running?'parked verification active':'passive cell hunt · uploads off'} · traffic 0.5 s`;
   $('clock').textContent=new Date().toLocaleTimeString();
-  let notice=uploadControlError||(st.config.demo?'SIMULATION — synthetic route and speeds. No modem or internet upload tests are running.':
+  let notice=st.storage?.error||st.error||uploadControlError||(st.config.demo?'SIMULATION — synthetic GPS, cells and timing ranges. No modem or internet upload tests are running.':
     !gpsFresh?'Waiting for fresh GPS. Cell readings keep recording; enable phone GPS to place new observations on the map.':
-    gps.acc_m>30?'GPS uncertainty exceeds 30 m. Cell readings keep recording; new locations need a more accurate fix.':
+    gps.acc_m>25?'GPS uncertainty exceeds 25 m. Cell readings keep recording; new locations need a more accurate fix.':
     !radioFresh?'GPS is recording. Waiting for the Mudi modem; check the connection and SSH access.':
     uploadFailure||(!st.running?'Cell hunt active · GPS and radio record continuously. Uploads are off; verify a promising spot when parked.':'Parked upload verification running · GPS and radio continue recording.'));
-  $('notice').textContent=notice;$('notice').classList.toggle('warn',!!uploadControlError||!st.config.demo&&(!gpsFresh||gps.acc_m>30||!radioFresh||!!uploadFailure));
+  $('notice').textContent=notice;$('notice').classList.toggle('warn',!!uploadControlError||!st.config.demo&&(!gpsFresh||gps.acc_m>25||!radioFresh||!!uploadFailure));
   if(map && gps){
     const ll=[gps.lat,gps.lon];
     if(!me){me=L.circleMarker(ll,{radius:7,color:'#fff',weight:3,fillColor:'#17392f',fillOpacity:1}).addTo(map);accuracy=L.circle(ll,{radius:gps.acc_m,weight:1,color:'#68876d',fillOpacity:.08}).addTo(map);}
@@ -174,8 +176,8 @@ $('gps').onclick=()=>{
 };
 async function tick(){
   try{const r=await fetch('/api/state?since='+cursor,{cache:'no-store',signal:AbortSignal.timeout(3000)});if(!r.ok)throw Error('Server error');
-    state=await r.json();draw(state.events,state.reset);window.consumeTrack?.(state.observations||[],state.reset);cursor=state.cursor;render(state);
-  }catch(e){$('connection').textContent='OFFLINE';$('notice').textContent='Connection lost. Displayed readings may be stale. Reconnecting…';$('notice').classList.add('warn');$('upload').textContent='—';$('traffic').textContent='—';$('accuracy').textContent='—';window.driveOffline?.();}
-  setTimeout(tick,500);
+    const incoming=await r.json();recorderOnline=true;if(recorderInstance&&recorderInstance!==incoming.instance){cursor=0;incoming.reset=true;bestSignature='';first=true;}recorderInstance=incoming.instance;state=incoming;draw(state.events,state.reset);window.consumeTrack?.(state.observations||[],state.reset);cursor=state.cursor;render(state);window.renderEvidence?.(state);
+  }catch(e){recorderOnline=false;renderUploadControls();$('connection').textContent='OFFLINE';$('notice').textContent='Connection lost. Displayed readings may be stale. Reconnecting…';$('notice').classList.add('warn');$('upload').textContent='—';$('traffic').textContent='—';$('accuracy').textContent='—';window.driveOffline?.();}
+  setTimeout(tick,350);
 }
 tick();

@@ -17,7 +17,7 @@ from drive_app import Survey, position, qualify_probe, upload, upload_batch, han
 
 
 def fix(ts, lat=52, acc=5):
-    return {'lat': lat, 'lon': 13, 'ts': ts, 'acc_m': acc}
+    return {'lat': lat, 'lon': 13, 'ts': ts, 'acc_m': acc, 'speed_kmh':0}
 
 
 class AcquisitionTests(unittest.TestCase):
@@ -35,9 +35,9 @@ class AcquisitionTests(unittest.TestCase):
         lte='"LTE","FDD",262,01,ABCD,123,1300,3,5,5,1,-85,-10,-60,20'
         for prefix in ['+QENG: ', '+QENG: "servingcell","NOCONN",']:
             parsed=parse_radio(prefix+lte)
-            self.assertEqual((parsed['rat'],parsed['lte_band'],parsed['lte_sinr']),('LTE','B3',20))
+            self.assertEqual((parsed['rat'],parsed['lte_band'],parsed['lte_sinr_raw']),('LTE','B3',20))
         sa=parse_radio('+QENG: "servingcell","NOCONN","NR5G-SA","TDD",262,01,ABCD,321,1,630000,78,12,-80,-10,25,30')
-        self.assertEqual((sa['rat'],sa['nr_band'],sa['nr_sinr']),('NR5G-SA','n78',25))
+        self.assertEqual((sa['rat'],sa['nr_band'],sa['nr_sinr_raw']),('NR5G-SA','n78',25))
 
     def test_cell_identity_preserves_operator_cell_and_channel(self):
         r = parse_radio('+QENG: "LTE","FDD",262,01,ABCD,123,1300,3,5,5,FACE,-85,-10,-60,20\n'
@@ -75,16 +75,16 @@ class AcquisitionTests(unittest.TestCase):
         s = Survey(':memory:')
         s.record('gps', fix(100))
         common = {'ts': 101, 'rat': 'NR5G-NSA', 'nr_pci': 1, 'nr_plmn': '262-01'}
-        s.record('radio', dict(common, nr_band='n78', nr_bw=100, nr_rsrp=-120, nr_sinr=0))
-        s.record('radio', dict(common, nr_band='n1', nr_bw=20, nr_rsrp=-90, nr_sinr=15,
+        s.record('radio', dict(common, nr_cell_id='AAA', nr_band='n78', nr_bw=100, nr_rsrp=-120, nr_sinr=0))
+        s.record('radio', dict(common, nr_cell_id='BBB', nr_band='n1', nr_bw=20, nr_rsrp=-90, nr_sinr=15,
                               ca='B3(20)+n1(20)', lte_cell_id='ABC', lte_band='B3'))
         cells = s.snapshot(0)['cells']
         self.assertEqual(cells[0]['band'], 'n1')
         self.assertEqual(cells[0]['hunt_priority'], 2)
         candidate = cells[0]['candidate_position']
         self.assertEqual((candidate['rsrp'], candidate['sinr'], candidate['lte_anchor']), (-90, 15, 'ABC'))
-        s.record('radio', dict(common, nr_band='n78', nr_bw=100, nr_rsrp=-80, nr_sinr=0))
-        s.record('radio', dict(common, nr_band='n78', nr_bw=100, nr_rsrp=-120, nr_sinr=25))
+        s.record('radio', dict(common, nr_cell_id='AAA', nr_band='n78', nr_bw=100, nr_rsrp=-80, nr_sinr=0))
+        s.record('radio', dict(common, nr_cell_id='AAA', nr_band='n78', nr_bw=100, nr_rsrp=-120, nr_sinr=25))
         n78 = next(c for c in s.snapshot(0)['cells'] if c['band']=='n78')
         self.assertEqual(n78['hunt_priority'], 1)  # Separate signal peaks cannot create a green candidate.
         s.db.close()
@@ -94,13 +94,13 @@ class AcquisitionTests(unittest.TestCase):
             path = Path(folder)/'survey.db'
             survey = Survey(path)
             survey.record('gps', fix(100))
-            r = {'ts': 102, 'rat': 'LTE', 'lte_band': 'B3', 'lte_pci': 1,
+            r = {'ts': 101, 'rat': 'LTE', 'lte_band': 'B3', 'lte_pci': 1,
                  'lte_rsrp': -90, 'lte_rsrq': -10, 'raw_radio': 'raw diagnostic text'}
             event = survey.record('radio', r)
             survey.record('radio', dict(r, ts=104))
             points = survey.snapshot(0)['observations']
             self.assertEqual(len(points), 1)
-            self.assertEqual((points[0]['gps_ts'], points[0]['gps_delta_s']), (100, 2))
+            self.assertEqual((points[0]['gps_ts'], points[0]['gps_delta_s']), (100, 1))
             self.assertEqual(points[0]['radio']['lte_rsrq'], -10)
             self.assertNotIn('raw_radio', points[0]['radio'])
             self.assertEqual(survey.snapshot(event['id'])['observations'], [])
@@ -168,7 +168,7 @@ class AcquisitionTests(unittest.TestCase):
                     self.assertIn('--interface',run.call_args.args[0])
 
     def test_slow_probe_does_not_block_gps_or_snapshot(self):
-        s=Survey(':memory:');s.running=True;stop=threading.Event();entered=threading.Event();release=threading.Event()
+        s=Survey(':memory:');s.gps(fix(time.time()));s.running=True;stop=threading.Event();entered=threading.Event();release=threading.Event()
         def slow(*a, **kw):
             entered.set();release.wait(2);return {'mbps':10,'bytes':100,'error':''}
         config=SimpleNamespace(upload_url='https://example.org',iface='en12',probe_every=4,upload_method='POST')
@@ -240,7 +240,7 @@ class AcquisitionTests(unittest.TestCase):
         self.assertFalse(moving['eligible'])
 
     def test_parked_verification_stops_after_three_attempts(self):
-        s = Survey(':memory:'); s.running = True; s.mode = 'parked'; s.remaining = 3
+        s = Survey(':memory:'); s.gps(fix(time.time())); s.running = True; s.mode = 'parked'; s.remaining = 3
         stop = threading.Event()
         config = SimpleNamespace(upload_url='https://example.org', iface='en12', probe_every=0, upload_method='POST')
         with patch('drive_app.upload_batch', return_value={'mbps': 10, 'bytes': 100, 'error': ''}) as batch:

@@ -45,7 +45,8 @@ function servingCard(label,r,prefix){
  const values=document.createElement('span');values.textContent=`PCI ${fmt(r[prefix+'_pci'])} · ${fmt(r[prefix+'_bw'])} MHz`;
  const signal=document.createElement('b');signal.textContent=`RSRP ${fmt(r[prefix+'_rsrp'])} dBm · SINR ${fmt(r[prefix+'_sinr'])} dB`;
  const quality=document.createElement('small');quality.textContent=`RSRQ ${fmt(r[prefix+'_rsrq'])} dB · ${r[prefix+'_plmn']||'PLMN —'} · Cell ${r[prefix+'_cell_id']||'ID not reported'} · Channel ${fmt(r[prefix+'_arfcn'])} · TAC ${r[prefix+'_tac']||'—'}`;
- card.append(title,values,signal,quality);return card;
+ const raw=document.createElement('small');raw.textContent=r[prefix+'_sinr_raw']==null?'':`SINR raw ${fmt(r[prefix+'_sinr_raw'])} · firmware encoding not calibrated`;
+ card.append(title,values,signal,quality,raw);return card;
 }
 window.renderRadio=st=>{
  const r=st.latest.radio||{},fresh=!!r.rat&&age(r)<=Math.max(3,st.config.radio_interval*3);

@@ -1,0 +1,10 @@
+{
+  "name": "mudi-cell-hunt",
+  "private": true,
+  "scripts": {
+    "test:ui": "node tests/browser.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}
