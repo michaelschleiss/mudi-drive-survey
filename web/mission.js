@@ -6,7 +6,7 @@
  mission.innerHTML=`<div class="mission-top"><span id="mission-phase">Discover</span><button id="mission-end" hidden>End hunt</button></div><h3 id="mission-name">Choose your target</h3><p id="mission-identity">Select a recorded cell below, then start a hunt.</p><div id="mission-contact">No active target</div><div id="mission-signals"><div><span>Strength</span><strong id="mission-rsrp">—</strong><small>dBm RSRP</small></div><div><span>Cleanliness</span><strong id="mission-sinr">—</strong><small>dB SINR</small></div></div><div id="mission-trend">Signal trend needs a target.</div><div id="mission-evidence"><div><span>Located readings</span><b id="mission-count">—</b></div><div><span>Mast position</span><b>Unresolved</b></div></div><p id="mission-guidance">Find a promising cell using its width and signal. Upload capacity remains unverified.</p><button id="mission-start" class="mission-primary">Start hunt on selected cell</button><div id="mission-actions" hidden><button id="mission-spot" class="mission-primary">Show promising observation</button><div class="mission-secondary"><button id="mission-fit">Fit target trail</button><button id="mission-return">Return to target</button></div><p id="mission-distance">GPS needed for distance to the observed spot.</p></div><p id="mission-error" role="status"></p>`;
  heading.after(mission);
  const empty=$('hunt-analysis-empty');empty.innerHTML='<div><strong id="mission-analysis-title">Inspect the evidence</strong><span>Strength, cleanliness and quality on the same GPS track.</span></div><button id="mission-analysis-toggle">Open signal charts</button>';
- let target=null,lastTarget=null,waypoint=null,waypointIdentity=null,pending=false,revision=0;
+ let target=null,lastTarget=null,waypoint=null,pending=false;
  function setExpanded(open){if(document.body.classList.contains('analysis-expanded')===open)return;document.body.classList.toggle('analysis-expanded',open);$('mission-analysis-toggle').textContent=open?'Close signal charts':'Open signal charts';requestAnimationFrame(()=>{map?.invalidateSize();TrackUI?.refresh?.();});}
  $('mission-analysis-toggle').onclick=()=>{if(TrackUI.selectedCell==='all'&&target)TrackUI.selectCell(target.identity);setExpanded(!document.body.classList.contains('analysis-expanded'));};
  const chartClose=$('track-close').onclick;$('track-close').onclick=()=>{setExpanded(false);chartClose();};
@@ -25,7 +25,7 @@
  $('mission-spot').onclick=()=>{
   const p=target?.candidate_position||target?.best_position;if(!p||!map)return;
   TrackUI.selectCell(target.identity);setFollow(false);
-  if(waypoint)map.removeLayer(waypoint);waypoint=L.layerGroup().addTo(map);waypointIdentity=target.identity;
+  if(waypoint)map.removeLayer(waypoint);waypoint=L.layerGroup().addTo(map);
   const text=document.createElement('div');text.className='mission-waypoint-label';text.textContent='Promising observation';
   L.circleMarker([p.lat,p.lon],{radius:11,color:'#b97916',weight:3,fillColor:'#fff3d5',fillOpacity:1}).bindTooltip(text,{permanent:true,direction:'top',offset:[0,-12]}).addTo(waypoint);
   L.circle([p.lat,p.lon],{radius:p.acc_m||0,color:'#b97916',weight:1,fillOpacity:.08}).addTo(waypoint);
@@ -35,8 +35,9 @@
   target=(st.cells||[]).find(c=>c.identity===st.target)||null;
   const chosen=selectedCandidate();
   $('mission-analysis-toggle').disabled=TrackUI.selectedCell==='all'&&!target;
-  if(lastTarget!==st.target){lastTarget=st.target;if(waypoint){map?.removeLayer(waypoint);waypoint=null;}waypointIdentity=null;if(target){TrackUI.selectCell(target.identity);setExpanded(false);}revision++;}
+  if(lastTarget!==st.target){lastTarget=st.target;if(waypoint){map?.removeLayer(waypoint);waypoint=null;}if(target){TrackUI.selectCell(target.identity);setExpanded(false);}}
   const active=!!target,display=target||chosen;
+  mission.classList.toggle('has-selection',!!display);
   mission.classList.toggle('has-target',active);document.body.classList.toggle('hunt-committed',active);
   $('mission-phase').textContent=active?'Hunting one cell':chosen?'Candidate selected':'Discover';
   $('mission-name').textContent=display?`${display.band} / ${fmt(display.bandwidth_mhz)} MHz`:'Choose your target';
@@ -81,10 +82,21 @@
  const panel=document.createElement('section');panel.id='live-hunt';
  panel.innerHTML=`<div class="mission-top"><span>Live driving hunt</span><button id="hunt-sound" aria-pressed="false">Enable chime</button></div><h3 id="live-bands">Waiting for modem</h3><p id="live-identity"></p><div id="live-detection" role="status">Listening for promising cells</div><div id="live-signals"></div><p id="live-capture"></p><div class="live-ta"><strong>Timing advance</strong><span>Unavailable · no validated live feed</span><p>Distance rings will require TA matched to this cell and a fresh GPS fix. LTE anchor TA cannot locate an NR cell by itself.</p></div><p id="live-last">Promising encounters are saved with the radio survey.</p><button id="hunt-review">Inspect recorded cells</button>`;
  $('hunt-mission').before(panel);
- const back=document.createElement('button');back.id='hunt-live-return';back.textContent='← Resume live driving';$('hunt-mission').before(back);
+ const radioSlot=document.createElement('div');radioSlot.id='live-radio-slot';$('live-signals').after(radioSlot);
+ radioSlot.append($('radio-dock'));
+ const details=document.createElement('details');details.id='live-extra';
+ details.innerHTML='<summary>Diagnostics</summary>';
+ for(const id of ['live-identity','live-capture','live-last'])details.append($(id));
+ details.append(panel.querySelector('.live-ta'));details.append($('hunt-live-details'));
+ $('hunt-review').textContent='Recorded cells';
+ $('hunt-tools').after(details);
+
+ const back=document.createElement('button');back.id='hunt-live-return';back.textContent='Live';
+ const navigation=document.createElement('div');navigation.id='hunt-navigation';navigation.setAttribute('aria-label','Map view');
+ navigation.append(back,$('hunt-review'));document.querySelector('.drive-brand').after(navigation);
  let live=true,audio=null,sound=false,lastSample=null,lastAlertAt=-Infinity;
  const seen=new Map();let alertCount=0,lastNotice='',wasSA=false,lastSAAlert=-Infinity;
- function setLive(value){live=value;document.body.classList.toggle('live-hunting',value);back.hidden=value;if(value){HuntMission.setExpanded(false);TrackUI.selectCell('all');}if(state)renderLive(state);}
+ function setLive(value){live=value;$('hunt-live-details').open=value;details.append($('hunt-live-details'));document.body.classList.toggle('live-hunting',value);back.hidden=false;back.setAttribute('aria-pressed',String(value));$('hunt-review').setAttribute('aria-pressed',String(!value));if(value){HuntMission.setExpanded(false);TrackUI.selectCell('all');}if(state)renderLive(state);requestAnimationFrame(()=>map?.invalidateSize());}
  $('hunt-review').onclick=()=>setLive(false);back.onclick=()=>setLive(true);
  const phoneSound=document.createElement('button');phoneSound.id='phone-hunt-sound';phoneSound.textContent='Enable detection chime';phoneSound.setAttribute('aria-pressed','false');document.querySelector('.drive-actions').prepend(phoneSound);phoneSound.onclick=()=>$('hunt-sound').click();$('hunt-sound').title=phoneSound.title='Two tones: promising cell. Three rising tones: 5G standalone. SA does not guarantee upload speed.';
  $('hunt-sound').onclick=async()=>{try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();if(!sound)await audio.resume();sound=!sound;$('hunt-sound').textContent=sound?'Chime on':'Enable chime';$('hunt-sound').setAttribute('aria-pressed',String(sound));phoneSound.textContent=sound?'Detection chime on':'Enable detection chime';phoneSound.setAttribute('aria-pressed',String(sound));if(sound)chime(state?.latest.radio?.rat==='NR5G-SA'&&age(state.latest.radio)<=3?'sa':'candidate');}catch{$('hunt-sound').textContent='Audio unavailable';sound=false;}};
@@ -94,15 +106,23 @@
   const r=st.latest.radio||{},now=Date.now()/1000,fresh=!!r.rat&&now-r.ts>=0&&now-r.ts<=Math.max(3,st.config.radio_interval*3);
   const isSA=fresh&&r.rat==='NR5G-SA';
   const prefixes=fresh?['lte','nr'].filter(p=>r[p+'_band']):[];
-  const carriers=prefixes.map(p=>({prefix:p,band:r[p+'_band'],width:r[p+'_bw'],rsrp:r[p+'_rsrp'],sinr:r[p+'_sinr'],rsrq:r[p+'_rsrq'],pci:r[p+'_pci'],identity:TrackModel.key(r,p)}));
-  const candidates=carriers.filter(c=>['n77','n78','n79'].includes(c.band)||(c.width>=20&&c.rsrp!=null&&c.rsrp>=-105&&c.sinr!=null&&c.sinr>=10));
+  // QENG describes the carriers we can identify and alert on; QCAINFO lists every
+  // aggregated carrier. Detection stays on the identified ones, display shows all.
+  const serving=prefixes.map(p=>({prefix:p,band:r[p+'_band'],width:r[p+'_bw'],rsrp:r[p+'_rsrp'],sinr:r[p+'_sinr'],rsrq:r[p+'_rsrq'],pci:r[p+'_pci'],identity:TrackModel.key(r,p)}));
+  const byBand=new Map(serving.map(c=>[c.band,c]));
+  const carriers=fresh&&r.carriers?.length
+   ?r.carriers.map(c=>byBand.get(c.band)||{prefix:null,band:c.band,width:c.bw_mhz,rsrp:c.rsrp,sinr:null,rsrq:c.rsrq,pci:c.pci,identity:null})
+   :serving;
+  const candidates=serving.filter(c=>['n77','n78','n79'].includes(c.band)||(c.width>=20&&c.rsrp!=null&&c.rsrp>=-105&&c.sinr!=null&&c.sinr>=10));
   const gps=st.latest.gps,gpsOK=gps&&now-gps.ts>=0&&now-gps.ts<=3&&gps.acc_m<=30;
   $('live-bands').textContent=carriers.length?carriers.map(c=>`${c.band} (${fmt(c.width)} MHz)`).join(' + '):'Waiting for fresh radio';
-  $('live-identity').textContent=carriers.map(c=>`${c.band} · ${r[c.prefix+'_cell_id']?'Cell '+r[c.prefix+'_cell_id']:'PCI '+fmt(c.pci)+' · partial ID'}`).join(' / ');
+  $('live-identity').textContent=carriers.map(c=>`${c.band} · ${c.prefix&&r[c.prefix+'_cell_id']?'Cell '+r[c.prefix+'_cell_id']:'PCI '+fmt(c.pci)+(c.prefix?' · partial ID':' · secondary')} · RSRQ ${fmt(c.rsrq)} dB`).join(' / ');
   panel.classList.toggle('promising',candidates.length>0);panel.classList.toggle('standalone',isSA);
-  $('live-detection').textContent=isSA?'5G SA connected · standalone · upload speed unverified':candidates.length?`Promising ${candidates.map(c=>c.band).join(' + ')} detected · upload capacity unverified`:fresh?'Recording current connection · watching for candidates':'Radio stale · waiting for new readings';
+  $('live-detection').hidden=fresh&&!isSA&&!candidates.length;
+  document.body.classList.toggle('has-cell-alert',isSA||candidates.length>0);
+  $('live-detection').textContent=isSA?'5G SA · speed untested':candidates.length?`Promising ${candidates.map(c=>c.band).join(' + ')} · speed untested`:fresh?'Listening for promising cells':'Radio stale · waiting for new readings';
   const signalBox=$('live-signals');signalBox.replaceChildren();
-  for(const c of carriers){const row=document.createElement('div');row.className='live-signal-row';for(const text of [c.band,`${fmt(c.rsrp)} dBm RSRP`,`${fmt(c.sinr)} dB SINR`,`${fmt(c.rsrq)} dB RSRQ`]){const span=document.createElement('span');span.textContent=text;row.append(span);}signalBox.append(row);}
+  for(const c of carriers){const row=document.createElement('div');row.className='live-signal-row';const band=document.createElement('strong');band.textContent=c.band;row.append(band);for(const [value,label] of [[c.rsrp,'Strength · dBm'],[c.sinr,'SINR · dB']]){const metric=document.createElement('div'),number=document.createElement('b'),caption=document.createElement('small');number.textContent=fmt(value);caption.textContent=label;metric.append(number,caption);row.append(metric);}row.title=`RSRQ ${fmt(c.rsrq)} dB · PCI ${fmt(c.pci)}`;signalBox.append(row);}
   $('live-capture').textContent=gpsOK?`GPS ±${fmt(gps.acc_m)} m · current radio observations mapped automatically`:'GPS missing or stale · radio saved, new positions paused';
   // Only a new radio sample can trigger an alert. Historical replay never chimes.
   if(fresh&&(lastSample===null||r.ts>lastSample)){
@@ -117,7 +137,7 @@
   $('live-last').textContent=lastNotice||'All radio observations are saved automatically. No target selection needed.';
   $('mission-analysis-title').textContent='Signal evidence along your route';
   document.body.classList.toggle('hunt-needs-gps',!gpsOK);
-  if(driveView==='phone'&&!st.running){$('drive-label').textContent=isSA?'5G SA connected · speed unverified':candidates.length?'Promising connection · capacity unverified':'Live driving hunt';$('drive-upload').textContent=carriers.map(c=>c.band).join(' + ')||'—';$('drive-upload').classList.add('live-band-readout');$('drive-measurement').textContent=carriers.map(c=>`${c.band} · PCI ${fmt(c.pci)} · ${fmt(c.rsrp)} dBm · SINR ${fmt(c.sinr)} dB`).join(' / ')||'Waiting for fresh radio';document.querySelector('.drive-best').firstChild.textContent='All-cell observations ';$('drive-best').textContent=(st.cells||[]).reduce((n,c)=>n+c.located,0);}
+  if(driveView==='phone'&&!st.running){$('drive-label').textContent=isSA?'5G SA connected · speed unverified':candidates.length?'Promising connection · capacity unverified':'Live driving hunt';$('drive-upload').textContent=carriers.map(c=>c.band).join(' + ')||'—';$('drive-upload').classList.add('live-band-readout');$('drive-measurement').textContent=carriers.map(c=>`${carriers.length>1?c.band+' · ':''}${fmt(c.rsrp)} dBm · SINR ${fmt(c.sinr)} dB`).join(' / ')||'Waiting for fresh radio';document.querySelector('.drive-best').firstChild.textContent='All-cell observations ';$('drive-best').textContent=(st.cells||[]).reduce((n,c)=>n+c.located,0);}
  }
  const previous=window.renderDrive;window.renderDrive=st=>{previous(st);renderLive(st);};
  // Mission's selection refreshes must also preserve the live readout.
