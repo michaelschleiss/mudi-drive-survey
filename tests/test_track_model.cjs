@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const M=require('../web/track-model.js');
+const observation=(id,ts,cell='ABC',rsrp=-90)=>({id,ts,gps_ts:ts,lat:52+id*.00001,lon:13,acc_m:5,gps_delta_s:0,radio:{lte_plmn:'262-01',lte_cell_id:cell,lte_band:'B3',lte_pci:10,lte_rsrp:rsrp,lte_sinr:15,lte_rsrq:-9,lte_bw:20}});
+const points=[...Array(6)].map((_,i)=>observation(i,i));
+let samples=M.samples(points);assert.equal(samples[3].stability,null);assert.equal(samples[4].stability,0);assert.equal(samples.filter(s=>s.change).length,0);
+points.push(observation(6,6,'DEF'));points.push(observation(7,7,'ABC'));points.push(observation(8,20,'ABC'));
+samples=M.samples(points);assert.equal(samples[6].change,true);assert.equal(samples[7].change,true);assert.equal(samples[7].stability,null);assert.equal(samples[8].change,false);assert.notEqual(samples[8].segment,samples[7].segment);assert.equal(samples[8].distance,samples[7].distance);
+assert.equal(M.normalize(M.key({nr_plmn:'262-01',nr_band:'n78',nr_arfcn:640000,nr_pci:12},'nr')),'nr:262-01:n78:640000:12');
+assert.equal(M.color({rsrq:null},'rsrq'),'#9ba59e');assert.equal(M.color({stability:0},'stability'),'#21836b');
+console.log('PASS: same-cell stability, minimum samples, handovers, gap segmentation, distance gaps, identity matching and unknown values');
+
+const targetReadings=M.samples([...Array(11)].map((_,i)=>observation(i,100+i,'TREND',i<6?-100:-95)));
+assert.equal(M.trend(targetReadings,'lte:262-01:TREND',110).label,'Strengthening');
+assert.equal(M.trend(targetReadings,'lte:262-01:TREND',120),null);
+assert.equal(M.trend(targetReadings.slice(-2),'lte:262-01:TREND',110),null);
+console.log('PASS: target trend requires recent contiguous same-cell windows');

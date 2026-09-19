@@ -16,7 +16,6 @@ final class Feeder: NSObject, CLLocationManagerDelegate {
         lm.distanceFilter = kCLDistanceFilterNone
         lm.requestAlwaysAuthorization()
         lm.startUpdatingLocation()
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in self.post() }
     }
     func locationManager(_ m: CLLocationManager, didUpdateLocations locs: [CLLocation]) {
         if let l = locs.last { last = l; post() }
@@ -30,7 +29,8 @@ final class Feeder: NSObject, CLLocationManagerDelegate {
     func post() {
         guard let l = last else { return }
         let speed = l.speed >= 0 ? l.speed * 3.6 : -1
-        let body = "{\"lat\":\(l.coordinate.latitude),\"lon\":\(l.coordinate.longitude),\"speed_kmh\":\(speed >= 0 ? String(speed) : "null"),\"acc_m\":\(l.horizontalAccuracy)}"
+        guard l.horizontalAccuracy >= 0 else { return }
+        let body = "{\"lat\":\(l.coordinate.latitude),\"lon\":\(l.coordinate.longitude),\"speed_kmh\":\(speed >= 0 ? String(speed) : "null"),\"acc_m\":\(l.horizontalAccuracy),\"ts\":\(l.timestamp.timeIntervalSince1970),\"source\":\"macOS\"}"
         print(String(format: "%@  %.5f, %.5f  ±%.0f m  %@", ISO8601DateFormatter().string(from: l.timestamp), l.coordinate.latitude, l.coordinate.longitude, l.horizontalAccuracy, speed >= 0 ? String(format: "%.0f km/h", speed) : ""))
         for p in ports {
             var r = URLRequest(url: URL(string: "http://127.0.0.1:\(p)/api/pos")!)
