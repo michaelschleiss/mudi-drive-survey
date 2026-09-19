@@ -1,5 +1,5 @@
 body[data-view=map]{--hunt-rail:310px;--analysis-height:64px;color:#15324a;background:#edf2f6}body[data-view=map].cell-analysis{--analysis-height:64px}body[data-view=map].analysis-expanded{--analysis-height:230px}
-body[data-view=map] #hunt-sidebar{top:62px;background:#f4f7fa;border-color:#cdd9e2}body[data-view=map] .drive-toolbar{height:62px;background:#f4f7fa;border-color:#cdd9e2}body[data-view=map] .drive-brand{color:#15324a;letter-spacing:.7px}body[data-view=map] #drive-session{background:#dfe9f0;color:#15324a;text-transform:none}
+body[data-view=map] #hunt-sidebar{top:62px;border-color:#cdd9e2}body[data-view=map] .drive-toolbar{height:62px;background:#f4f7fa;border-color:#cdd9e2}body[data-view=map] .drive-brand{color:#15324a;letter-spacing:.7px}body[data-view=map] #drive-session{background:#dfe9f0;color:#15324a;text-transform:none}
 body[data-view=map] #hunt-map-tools{top:62px;height:98px;background:#f4f7fa;padding:12px 18px 8px}body[data-view=map] .map-wrap{top:160px;bottom:calc(var(--analysis-height) + 40px)}body[data-view=map] #drive-health{height:40px;padding:12px 18px;background:#edf3f6;color:#15324a;border-color:#cdd9e2}body[data-view=map] #drive-health.warning{background:#fff1d9;color:#76500f}
 .hunt-heading{padding:17px 17px 0}.mission-wordmark{font-size:13px;color:#087d92;font-weight:650}.hunt-heading h2{font-size:18px;line-height:1.3;letter-spacing:-.25px;margin:7px 0 0}.hunt-committed .hunt-heading{display:none}
 #hunt-mission{padding:16px 17px 12px;border-bottom:1px solid #ccd9e3;background:#e6eef4;color:#15324a;flex-shrink:0}#hunt-mission.has-target{border-left:4px solid #087d92;padding-left:13px}.mission-top{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:#47687c}.mission-top button{border:0;background:none;color:#526c7c;padding:0;cursor:pointer;font-size:11px}#hunt-mission h3{font-size:25px;line-height:1.25;letter-spacing:-.5px;margin:9px 0 4px}#hunt-mission p{font-size:11px;line-height:1.45;margin:7px 0;color:#526b7d}#mission-contact{font-size:12px;padding:7px 0;font-weight:650}#mission-contact[data-state=live]{color:#087d78}#mission-contact[data-state=lost]{color:#986b22}#mission-signals{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0}#mission-signals[hidden],#mission-evidence[hidden],#mission-actions[hidden]{display:none}#mission-signals>div{display:flex;flex-direction:column;gap:2px}#mission-signals span{font-size:12px;color:#47687c}#mission-signals strong{font-size:32px;letter-spacing:-.5px;line-height:1.15;font-variant-numeric:tabular-nums}#mission-signals small{font-size:10px;color:#587486}#mission-trend{font-size:11px;line-height:1.5;padding:6px 0;color:#365d73}#mission-evidence{border-top:1px solid #c8d7e1;margin-top:4px;padding:7px 0}#mission-evidence>div{display:flex;justify-content:space-between;font-size:11px;line-height:1.7}#mission-evidence b{font-weight:600}
@@ -13,27 +13,169 @@ body[data-view=map] #hunt-analysis-empty,body[data-view=map].cell-analysis:not(.
 @media(max-width:799px){body[data-view=map]{--hunt-rail:230px}body[data-view=map] #hunt-map-tools{height:152px}body[data-view=map] .map-wrap{top:214px}.hunt-map-title{font-size:12px}body[data-view=map].analysis-expanded #track-inspector:not([hidden]){display:block;overflow:auto}#mission-signals strong{font-size:26px}#hunt-mission{padding:10px}#hunt-mission h3{font-size:20px}#mission-guidance{display:none}#mission-analysis-toggle{font-size:10px;padding:8px}#hunt-analysis-empty span{display:none}}
 @media(prefers-reduced-motion:reduce){#hunt-mission *,#hunt-sidebar *{transition:none!important;animation:none!important}}
 
-body[data-view=phone] .drive-label{line-height:1.6;letter-spacing:1px;max-width:350px;margin-inline:auto}body[data-view=phone] #drive-display .drive-actions #drive-pause{background:transparent;color:#cce0c0;border:1px solid #57745f;font-size:17px;padding:15px}body[data-view=phone].hunt-needs-gps .drive-actions #drive-location{background:#cee4ac;color:#183626;border-color:#cee4ac;font-weight:700}
+body[data-view=phone] .drive-label{line-height:1.6;max-width:350px;margin-inline:auto}body[data-view=phone] #drive-display .drive-actions #drive-pause{border:1px solid #57745f;padding:15px}body[data-view=phone].hunt-needs-gps .drive-actions #drive-location{background:#cee4ac;color:#183626;border-color:#cee4ac;font-weight:700}
 
-#live-hunt{display:none;padding:16px;background:#e5eef4;color:#15324a;border-bottom:1px solid #cdd9e2}body.live-hunting #live-hunt{display:block}body.live-hunting #hunt-mission,body.live-hunting .hunt-heading{display:none}#hunt-live-return{margin:10px 16px}#hunt-live-return[hidden]{display:none}#live-hunt h3{font-size:24px;line-height:1.3;margin:16px 0 8px;letter-spacing:-.5px}#live-identity,#live-capture,#live-last{font-size:12px;line-height:1.5}#live-detection{padding:12px;background:#d4e3ec;font-weight:650;line-height:1.5;font-size:13px;border-left:4px solid #7290a3}#live-hunt.promising #live-detection{background:#d8efd8;border-color:#277647;color:#215d30}#live-signals{margin:14px 0}.live-signal-row{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:10px 0;border-bottom:1px solid #c5d7e3;font-size:12px}.live-signal-row span:first-child{font-weight:750}.live-ta{margin:16px 0;padding:12px;background:#f4f7fa;border:1px solid #cdd9e2;font-size:12px}.live-ta strong,.live-ta>span{display:block;margin-bottom:6px}.live-ta p{font-size:11px;line-height:1.5;margin:8px 0 0;color:#4a6172}#hunt-review{width:100%;padding:10px}body.live-hunting[data-view=phone] #drive-upload.live-band-readout{font-size:clamp(40px,13vw,70px);letter-spacing:-2px}body.live-hunting[data-view=phone] #drive-measurement{line-height:1.6}
+#live-hunt{display:none;padding:16px;background:#e5eef4;color:#15324a;border-bottom:1px solid #cdd9e2}body.live-hunting #live-hunt{display:block}body.live-hunting #hunt-mission,body.live-hunting .hunt-heading{display:none}#hunt-live-return[hidden]{display:none}#live-hunt h3{line-height:1.3;letter-spacing:-.5px}#live-identity,#live-capture,#live-last{font-size:12px;line-height:1.5}#live-detection{padding:12px;background:#d4e3ec;font-weight:650;line-height:1.5;font-size:13px;border-left:4px solid #7290a3}#live-hunt.promising #live-detection{background:#d8efd8;border-color:#277647;color:#215d30}#live-signals{margin:14px 0}.live-signal-row{display:grid;border-bottom:1px solid #c5d7e3;font-size:12px}.live-signal-row span:first-child{font-weight:750}.live-ta{margin:16px 0;padding:12px;background:#f4f7fa;border:1px solid #cdd9e2;font-size:12px}.live-ta strong,.live-ta>span{display:block;margin-bottom:6px}.live-ta p{font-size:11px;line-height:1.5;margin:8px 0 0;color:#4a6172}#hunt-review{width:100%;padding:10px}body.live-hunting[data-view=phone] #drive-upload.live-band-readout{font-size:clamp(40px,13vw,70px);letter-spacing:-2px}body.live-hunting[data-view=phone] #drive-measurement{line-height:1.6}
 
 #phone-hunt-sound{display:none}body[data-view=phone] #phone-hunt-sound{display:block;font-size:14px;padding:10px;min-height:40px}
 
 /* One-action upload check, always accessible from the hunting map. */
 #hunt-tools{margin-top:auto;max-height:32vh;overflow:auto;flex-shrink:0}
-#hunt-tools h3{margin:0 0 5px;font-size:14px;color:#15324a}
+
 #hunt-tools .upload-test-help{margin:0 0 10px;font-size:11px}
 #hunt-tools #drive-pause{width:100%;min-height:44px;background:#087d92;color:white;border:0;font-size:14px;font-weight:650}
 #hunt-tools #drive-pause:disabled{opacity:.6}
 #verification-result{margin-top:10px}#verification-result>strong{font-size:11px;font-weight:500;color:#536f80}
 .verification-speed{display:flex;align-items:baseline;gap:8px;margin-top:4px;color:#15324a}
 .verification-speed b{font-size:34px;line-height:1.15;font-variant-numeric:tabular-nums}.verification-speed span{font-size:13px}
-#verification-result>p{margin:3px 0 8px}#verification-result details{margin-top:8px}#verification-result summary{cursor:pointer}
+#verification-result>p{margin:3px 0 8px}
 
 body[data-view=map] #live-hunt,body[data-view=map] #hunt-mission{min-height:0;overflow:auto;flex-shrink:1}
 
-#verification-result .upload-carrier-evidence{font-size:12px;color:#244c66;line-height:1.5;margin-top:10px}#verification-result>small{display:block;font-size:10px;color:#617889;line-height:1.4}
+
 
 #ta-toggle{width:100%;padding:7px;margin:3px 0 9px;font-size:12px} .live-ta{border-left:3px solid #d18c39}
 
 #live-hunt.standalone #live-detection{background:#dce6fa;border-color:#536fba;color:#233f79}
+
+/* Driving: live evidence first; historical tools belong to review mode. */
+body[data-view=map].live-hunting #hunt-list-head,
+body[data-view=map].live-hunting #hunt-inventory-slot,
+body[data-view=map].live-hunting #hunt-map-tools,
+body[data-view=map].live-hunting #hunt-analysis-empty,
+body[data-view=map].live-hunting #track-inspector{display:none!important}
+body[data-view=map].live-hunting .map-wrap{top:62px;bottom:40px}
+body[data-view=map].live-hunting #hunt-sidebar{overflow-y:auto}
+body[data-view=map].live-hunting #live-hunt{overflow:visible;flex-shrink:0;background:#f4f7fa}
+#live-hunt h3{font-size:27px;margin:20px 0 16px}
+.live-signal-row{grid-template-columns:40px 1fr 1fr;align-items:center;gap:12px;padding:16px 0}
+.live-signal-row b{display:block;font-size:28px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-1px}
+.live-signal-row small{display:block;font-size:10px;color:#526b7d;margin-top:4px}
+#live-extra{margin:18px 0;font-size:12px;color:#526b7d}
+#live-extra summary{cursor:pointer;padding:10px 0;min-height:36px}
+#hunt-review{border:1px solid #bdceda;background:white;color:#234e67;border-radius:6px;min-height:44px}
+#hunt-sound{min-height:36px;padding:6px 8px;border:1px solid #bdceda;border-radius:6px;background:white}
+#hunt-sound[aria-pressed=true]{background:#d8efd8;color:#215d30}
+body[data-view=map].live-hunting #hunt-tools{max-height:none;overflow:visible}
+body[data-view=map].live-hunting #hunt-live-details{padding:12px 18px}
+body[data-view=map].live-hunting #drive-details{display:none}
+body[data-view=map].live-hunting #drive-health{font-size:12px}
+#verification-result:empty{display:none}
+
+
+/* Shared visual language across the map and phone companion. */
+body[data-view=phone]{background:#edf2f6;color:#15324a}
+body[data-view=phone] #drive-display{background:#f4f7fa;gap:16px;padding-top:max(18px,env(safe-area-inset-top))}
+body[data-view=phone] .drive-brand{color:#15324a;letter-spacing:.7px}
+body[data-view=phone] #drive-session{background:#dfe9f0;color:#15324a;border-radius:6px;letter-spacing:.6px}
+body[data-view=phone] .drive-readout{color:#15324a}
+body[data-view=phone] .drive-label,body[data-view=phone] #drive-measurement{color:#526b7d}
+body[data-view=phone] .drive-label{font-size:12px;letter-spacing:.5px}
+body[data-view=phone] #drive-upload{color:#15324a;font-weight:650}
+body[data-view=phone] .drive-best{border-color:#cdd9e2;color:#526b7d;font-size:12px;margin-top:24px;padding-top:16px}
+body[data-view=phone] .drive-best strong{color:#15324a;font-size:20px}
+body[data-view=phone] #drive-display button{background:#fff;color:#234e67;border:1px solid #bdceda;border-radius:6px;min-height:46px;font-size:14px}
+body[data-view=phone] #drive-display .drive-actions #drive-pause{background:#087d92;color:#fff;border-color:#087d92;font-size:14px;min-height:48px}
+body[data-view=phone] #drive-display #drive-location{background:#fff;color:#234e67;border-color:#bdceda;font-size:14px}
+body[data-view=phone].hunt-needs-gps #drive-display #drive-location{background:#dcecf2;color:#16556b;border-color:#78a4b5}
+body[data-view=phone] #drive-display #phone-hunt-sound[aria-pressed=true]{background:#d8efd8;color:#215d30;border-color:#9ac5a4}
+body[data-view=phone] #drive-health{background:#edf3f6;color:#15324a;border:1px solid #cdd9e2;border-radius:6px;font-size:12px}
+body[data-view=phone] #drive-health.warning{background:#fff1d9;color:#76500f;border-color:#e6cea3}
+body[data-view=phone] #drive-awake{color:#617889}
+body[data-view=phone] #drive-display button:focus-visible{outline:3px solid #c58420;outline-offset:2px}
+
+/* Omit routine mode labels; surface only actionable connection states. */
+body.live-hunting #live-hunt .mission-top>span{display:none}
+body.live-hunting #live-hunt .mission-top{justify-content:flex-end}
+#live-detection[hidden]{display:none}
+body.live-hunting:not(.verification-running) #drive-session{display:none}
+body[data-view=phone].live-hunting:not(.verification-running) .drive-label{display:none}
+
+/* Keep secondary evidence in one disclosure and remove duplicate counters. */
+body[data-view=phone].live-hunting .drive-best{display:none}
+body[data-view=phone].live-hunting.has-cell-alert:not(.verification-running) .drive-label{display:block}
+body[data-view=map] #live-extra #hunt-live-details{padding:10px 0;border:0;background:transparent}
+body[data-view=map] #live-extra #hunt-live-details summary{font-size:12px;font-weight:400}
+
+#verification-result>strong{display:block}
+
+body.live-hunting #live-extra #hunt-live-details>summary{display:none}
+
+#mast-range-glance{padding:12px 0;border-bottom:1px solid #cdd9e2;font-size:12px;line-height:1.5;color:#526b7d}
+
+/* Arrange live evidence, test results and secondary controls in reading order. */
+body[data-view=map].live-hunting #live-hunt{display:flex;flex-direction:column;padding:20px 18px 16px}
+body[data-view=map].live-hunting #live-bands{order:0;margin:0 0 16px;font-size:28px}
+body[data-view=map].live-hunting #live-detection{order:1}
+body[data-view=map].live-hunting #live-signals{order:2;margin:0}
+body[data-view=map].live-hunting #mast-range-glance{order:3;padding:16px 0;border-bottom:0}
+body[data-view=map].live-hunting #live-hunt .mission-top{order:4;margin-top:2px;justify-content:flex-start}
+body[data-view=map] #drive-display .drive-toolbar #hunt-review{width:auto;margin:0;min-height:38px;padding:9px 13px;font-size:12px}
+body:not(.live-hunting) #hunt-review,body:not([data-view=map]) #hunt-review{display:none}
+body[data-view=map] #hunt-sidebar>#live-extra{flex-shrink:0;margin:0;padding:4px 18px 12px;border-top:1px solid #cdd9e2}
+body:not([data-view=map]) #hunt-sidebar>#live-extra{display:none}
+body[data-view=map].live-hunting #hunt-tools{display:flex;flex-direction:column;gap:10px;padding:18px;margin-top:auto}
+body[data-view=map].live-hunting #verification-result{order:0;margin:0;padding:0 0 12px;border-top:0;border-bottom:1px solid #cdd9e2}
+body[data-view=map].live-hunting #hunt-tools .upload-test-help{order:1;margin:0}
+body[data-view=map].live-hunting #upload-test-action{order:2}
+body[data-view=phone] .drive-toolbar{order:0}
+body[data-view=phone] #drive-health{order:1;margin:0}
+body[data-view=phone] .drive-readout{order:2;padding:24px 0}
+body[data-view=phone] .drive-actions{order:3}
+body[data-view=phone] #drive-awake{order:4}
+body[data-view=phone] #drive-location{order:0}
+body[data-view=phone] #phone-hunt-sound{order:1}
+body[data-view=phone] #drive-pause{order:2}
+
+/* Review starts with the recorded cells, not an empty target tutorial. */
+body[data-view=map]:not(.live-hunting) .hunt-heading,
+body[data-view=map]:not(.live-hunting) #hunt-mission:not(.has-selection),
+body[data-view=map]:not(.live-hunting) #mission-guidance,
+body[data-view=map]:not(.live-hunting) #hunt-tools,
+body[data-view=map]:not(.live-hunting) #live-extra,
+body[data-view=map]:not(.live-hunting) #drive-session,
+body[data-view=map]:not(.live-hunting) #drive-details{display:none}
+body[data-view=map]:not(.live-hunting) #hunt-sidebar{overflow-y:auto}
+#hunt-live-return{border:1px solid #bdceda;background:white;color:#234e67;border-radius:6px;min-height:40px;margin:16px 17px 8px;font:inherit;font-size:13px;cursor:pointer;flex-shrink:0}
+body[data-view=map]:not(.live-hunting) #hunt-inventory-slot{flex:1;min-height:120px;overflow:auto}
+body[data-view=map]:not(.live-hunting) #cell-inventory{max-height:none}
+body[data-view=map]:not(.live-hunting) #hunt-map-tools .hunt-map-title,
+body[data-view=map]:not(.live-hunting) #radio-layer-note{display:none}
+body[data-view=map]:not(.live-hunting) #hunt-map-tools{height:64px;padding:8px 18px}
+body[data-view=map]:not(.live-hunting) .map-wrap{top:126px}
+body[data-view=map]:not(.live-hunting) #hunt-analysis-empty span{display:none}
+body[data-view=map]:not(.live-hunting) #hunt-mission{flex-shrink:0}
+@media(max-width:799px){body[data-view=map]:not(.live-hunting) #hunt-map-tools{height:152px}body[data-view=map]:not(.live-hunting) .map-wrap{top:214px}}
+
+/* One workspace and persistent navigation, shared by live and review. */
+#drive-details{display:none!important}
+#hunt-navigation{display:flex;align-items:center;gap:3px;padding:3px;background:#e5edf3;border:1px solid #cdd9e2;border-radius:8px}
+body[data-view=map] #drive-display #hunt-navigation button{display:block;width:auto;margin:0;border:0;background:transparent;box-shadow:none;min-height:34px;padding:8px 12px;font-size:12px;color:#526b7d}
+body[data-view=map] #drive-display #hunt-navigation button[aria-pressed=true]{background:white;color:#15324a;box-shadow:0 1px 3px #15324a18}
+body[data-view=phone] #hunt-navigation{display:none}
+body[data-view=map] .drive-brand{margin-right:12px}
+body[data-view=map] #hunt-navigation{margin-right:auto}
+body[data-view=map] #hunt-sidebar{background:#f4f7fa}
+body[data-view=map]:not(.live-hunting) #hunt-list-head{padding-top:20px}
+body[data-view=map] #hunt-mission{background:#f4f7fa}
+body[data-view=map] #mission-phase,body[data-view=map] #mission-guidance,body[data-view=map] #mission-evidence{display:none}
+body[data-view=map] #hunt-mission h3{font-size:24px}
+body[data-view=map] #hunt-live-details{background:transparent}
+@media(max-width:1100px){body[data-view=map] .drive-toolbar{gap:6px}body[data-view=map] .drive-brand{margin-right:4px;font-size:10px}body[data-view=map] #drive-session{display:none}}
+
+/* One radio readout: the serving-cell panel is the live source of truth. */
+body[data-view=map].live-hunting #live-bands,
+body[data-view=map].live-hunting #live-signals,
+#live-identity,#live-capture,#live-last,#hunt-live-details:empty{display:none}
+#live-radio-slot{order:2}
+body[data-view=map] #live-radio-slot #radio-dock{display:block;position:static;width:auto;max-height:none;margin:0;padding:0;background:transparent;border:0;box-shadow:none;overflow:visible}
+#live-radio-slot #dock-ca,#live-radio-slot .dock-controls{display:none}
+#live-radio-slot .dock-heading{font-size:11px;letter-spacing:0;color:#526b7d;margin-bottom:10px}
+#live-radio-slot .radio-carrier{padding:16px 0;border-top:1px solid #cdd9e2;gap:8px}
+#live-radio-slot .radio-carrier strong{font-size:24px;color:#15324a}
+#live-radio-slot .radio-carrier b{font-size:15px;color:#15324a;line-height:1.6}
+#live-radio-slot .radio-carrier span,#live-radio-slot .radio-carrier small{font-size:12px;line-height:1.6;color:#526b7d}
+#live-extra #hunt-live-details{display:none}
+
+body[data-view=map].live-hunting #live-radio-slot{order:0}
+body[data-view=map].live-hunting #live-detection{order:1;margin-top:10px}

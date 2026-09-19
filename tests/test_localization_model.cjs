@@ -1,0 +1,38 @@
+const assert=require('node:assert/strict');
+const {selectedCells,matches,drawable}=require('../web/localization.js');
+const row={rat:'nr',plmn:'262-02',band:'n78',pci:414,channel:640000,session_id:'s1',association_epoch:'e1',subscription:2};
+const cell={...row}; const ta={session_id:'s1',association_epoch:'e1'};
+assert(matches(row,cell,ta,true));
+for(const field of ['rat','plmn','band','pci','channel','session_id','association_epoch']) {
+ const changed={...row,[field]:'other'};
+ assert(!matches(changed,cell,ta,true),field);
+}
+assert(!matches({...row,session_id:undefined},cell,ta,true));
+assert(!matches({...row,association_epoch:undefined},cell,ta,true));
+assert(!matches({...row,cell_id:'A'},{...cell,cell_id:'B'},ta,true));
+assert(!matches({...row,subscription:1},{...cell,subscription:2},ta,true));
+assert(!matches(row,{rat:'nr',plmn:'262-02',band:'n78',pci:414,channel:640000},ta,false));
+assert(!matches({...row,cell_id:'A',session_id:'old'},{...cell,cell_id:'A'},ta,false));
+assert(matches({...row,cell_id:'A'},{...cell,cell_id:'A'},ta,false));
+const restarted={session_id:'s2',association_epoch:'e2'};
+assert(matches(row,cell,restarted,false),'review survives live capture restart');
+assert(!matches(row,cell,restarted,true),'live excludes previous capture');
+assert(!matches(row,{...cell,association_epoch:'another'},restarted,false),'review isolates repeated local signatures');
+assert(!matches(row,{...cell,session_id:undefined},restarted,false),'review requires recorded session');
+for(const field of ['rat','plmn','band','pci','channel'])assert(!matches({...row,[field]:undefined},cell,ta,true), 'missing '+field);
+const state={target:'lte:x:old',cells:[{identity:'lte:x:old',band:'B1'}],latest:{radio:{ts:Date.now()/1000,subscription:2,lte_band:'B3',lte_pci:2,nr_band:'n78',nr_pci:414}}};
+assert.deepEqual(selectedCells(state,true,'lte:x:old').map(c=>c.band),['B3','n78']);
+assert.deepEqual(selectedCells(state,false,'lte:x:old').map(c=>c.band),['B1']);
+assert.equal(selectedCells(state,false,'all').length,0);
+assert.equal(selectedCells({...state,latest:{radio:{...state.latest.radio,ts:90}}},true,'all',100).length,0);
+assert.equal(selectedCells({...state,latest:{radio:{...state.latest.radio,ts:101}}},true,'all',100).length,0);
+assert.equal(selectedCells({...state,latest:{radio:{...state.latest.radio,ts:undefined}}},true,'all',100).length,0);
+assert.equal(selectedCells({...state,latest:{radio:{...state.latest.radio,ts:99}}},true,'all',100).length,2);
+assert(!matches({...row,subscription:undefined},cell,ta,true));
+assert(!matches(row,{...cell,subscription:undefined},ta,true));
+assert(!matches({...row,subscription:undefined},{...cell,subscription:undefined},ta,true));
+assert(!matches({...row,cell_id:'A'},{...cell,cell_id:'A',subscription:undefined},ta,false));
+assert(!drawable({...row,timing_advance_us:18,range_m:2698,map_eligible:false,lat:48,lon:11}));
+assert(!drawable({...row,range_m:2698,lat:null,lon:null}));
+assert(drawable({...row,range_m:820,lat:48,lon:11}));
+console.log('Localization identity and freshness checks passed');

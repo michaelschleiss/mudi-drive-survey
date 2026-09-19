@@ -23,4 +23,7 @@ body[data-view=map] #drive-health{position:fixed;left:var(--hunt-rail);right:0;b
 
 body[data-view=map] #hunt-inventory-slot .hunt-filter{display:none}
 
+/* Visible map-layer control: avoid the collapsed Leaflet widget behind hunt chrome. */
+.hunt-map-title #emf-toggle{margin-left:auto;border:1px solid #b9cabe;background:#f8faf5;color:#345c47;border-radius:7px;padding:7px 10px;font:inherit;font-size:11px;white-space:nowrap}.hunt-map-title #emf-toggle[aria-pressed="true"]{background:#e7f0e3;border-color:#648267}
+
 #verification-result{border-top:1px solid #d4ddcd;margin-top:12px;padding-top:12px;font-size:11px;line-height:1.6}.verification-metrics>div{display:flex;justify-content:space-between;gap:8px;padding:5px 0}.verification-metrics b{white-space:nowrap}#verification-result details>p{border-top:1px solid #d4ddcd;padding-top:6px}

@@ -460,9 +460,14 @@ B886 v3.8 relative corrections are recorded separately as `nr_ta_adjustment`.
 They are never turned into absolute ranges without a verified initial baseline
 and timing-group/carrier continuity. Historical ranges cannot seed a new session.
 
-The map shows up to 30 dashed rings for the hunted or current NR signature;
-PCI/channel signatures may repeat. No confirmed mast pin or quantified error
-bound is claimed. Stream heartbeat age describes reader health, not range age.
+The map shows up to 12 dashed rings for current live cells or the selected review
+cell, scoped by subscription, operator, RAT, session and association epoch.
+PCI/channel signatures may repeat. Candidate areas remain experimental; no
+confirmed mast pin or calibrated error bound is claimed. LTE QMI timing is
+recorded separately and cannot become a mapped range while its measurement age
+is unknown. LTE diagnostic timing and identity events are also recorded for
+validation. See [localization status and validation](docs/localization.md).
+Stream heartbeat age describes reader health, not range age.
 Events remain network-driven and may be sparse; direct streaming does not
 promise a fresh distance every 250 ms.
 

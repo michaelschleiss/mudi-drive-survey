@@ -4,7 +4,7 @@ const fmt = (v, digits=0) => v == null ? '—' : Number(v).toFixed(digits);
 const age = p => p ? Math.max(0, Date.now()/1000-p.ts) : Infinity;
 const color = v => v == null ? '#899588' : v < 40 ? '#cf735b' : v < 80 ? '#dcbf65' : v < 150 ? '#57b59c' : '#1e7766';
 let cursor=0, state=null, follow=true, watch=null, history=[], latestValid=null, lastGps=null, first=true, markers=[];
-let map=null, tiles=null, track=null, tests=null, spots=null, me=null, accuracy=null;
+let map=null, tiles=null, track=null, tests=null, spots=null, emfSites=null, me=null, accuracy=null;
 let recordedTests=[];
 let uploadControlPending=false,uploadControlTarget=false,uploadControlError='';
 let selectedUploadMode='parked';
@@ -47,13 +47,48 @@ function setFollow(enabled){
 }
 setFollow(follow);
 if(window.L){
-  map=L.map('map',{zoomControl:false,preferCanvas:true}).setView([52.515,13.39],13);
+  let savedPosition=null;
+  try{const p=JSON.parse(localStorage.getItem('atlas-last-position'));if(Array.isArray(p)&&p.length===2&&p.every(Number.isFinite)&&Math.abs(p[0])<=90&&Math.abs(p[1])<=180)savedPosition=p;}catch{}
+  map=L.map('map',{zoomControl:false,preferCanvas:true}).setView(savedPosition||[0,0],savedPosition?16:2);
   L.control.zoom({position:'bottomright'}).addTo(map);
   tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
   tiles.on('tileerror',()=>{$('map-label').textContent='Basemap unavailable · GPS track still records';});
   track=L.layerGroup().addTo(map);tests=L.layerGroup().addTo(map);spots=L.layerGroup().addTo(map);
+  emfSites=L.layerGroup().addTo(map);
   map.on('dragstart',()=>setFollow(false));
 } else $('map-label').textContent='Map library unavailable · acquisition continues';
+function renderEmfToggle(){
+  const button=$('emf-toggle');if(!button||!map||!emfSites)return;
+  const visible=map.hasLayer(emfSites);
+  button.textContent=`EMF sites · ${visible?'on':'off'}`;
+  button.setAttribute('aria-pressed',String(visible));
+}
+function toggleEmfSites(){
+  if(!map||!emfSites)return;
+  if(map.hasLayer(emfSites))map.removeLayer(emfSites);else emfSites.addTo(map);
+  renderEmfToggle();
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  const button=$('emf-toggle');if(button)button.onclick=toggleEmfSites;
+  renderEmfToggle();
+});
+async function loadEmfSites(){
+  if(!emfSites)return;
+  try{
+    const r=await fetch('/api/emf-sites',{cache:'no-store'});if(!r.ok)throw Error('not imported');
+    const data=await r.json();
+    for(const site of data.sites||[]){
+      if(!Number.isFinite(site.lat)||!Number.isFinite(site.lon))continue;
+      const small=site.kind==='small_cell';
+      const providers=(site.operators||[]).join(' · ')||(small?'Operator not listed in small-cell record':'Operator not listed');
+      const sectors=[...new Set((site.antennas||[]).map(a=>a.azimuth_deg).filter(Boolean))].join('°, ')||'not listed';
+      L.circle([site.lat,site.lon],{radius:small?12:25,color:small?'#b36936':'#7752a2',weight:2,fillColor:'#fff',fillOpacity:.9})
+        .bindTooltip(`${small?'EMF small cell':'EMF site'} ${site.site_certificate_id} · ${providers} · sectors ${sectors}° · BNetzA position may be offset up to 80 m`)
+        .addTo(emfSites);
+    }
+  }catch(_){ /* Layer remains absent until an import exists. */ }
+}
+loadEmfSites();
 function keep(layer){markers.push(layer);if(markers.length>6000){const old=markers.shift();track.removeLayer(old);tests.removeLayer(old);}}
 function draw(events, reset){
   if(reset){track?.clearLayers();tests?.clearLayers();markers=[];lastGps=null;history=[];latestValid=null;recordedTests=[];}
@@ -139,6 +174,7 @@ function render(st){
   $('notice').textContent=notice;$('notice').classList.toggle('warn',!!uploadControlError||!st.config.demo&&(!gpsFresh||gps.acc_m>30||!radioFresh||!!uploadFailure));
   if(map && gps){
     const ll=[gps.lat,gps.lon];
+    try{localStorage.setItem('atlas-last-position',JSON.stringify(ll));}catch{}
     if(!me){me=L.circleMarker(ll,{radius:7,color:'#fff',weight:3,fillColor:'#17392f',fillOpacity:1}).addTo(map);accuracy=L.circle(ll,{radius:gps.acc_m,weight:1,color:'#68876d',fillOpacity:.08}).addTo(map);}
     me.setLatLng(ll);me.setStyle({fillOpacity:gpsFresh?1:.3});accuracy.setLatLng(ll).setRadius(Math.min(gps.acc_m,2000));
     if(first){map.setView(ll,16);first=false;}else if(follow&&gpsFresh)map.panTo(ll,{animate:false});

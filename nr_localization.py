@@ -26,6 +26,13 @@ def _crc_table():
 CRC_TABLE = _crc_table()
 
 
+class DiagnosticPacket(bytes):
+    def __new__(cls, data, subscription=None):
+        obj = super().__new__(cls, data)
+        obj.subscription = subscription
+        return obj
+
+
 def packets(data):
     for raw in data.split(b'\x7e')[:-1]:
         out = bytearray()
@@ -43,10 +50,15 @@ def packets(data):
             crc = (crc >> 8) ^ CRC_TABLE[(crc ^ b) & 255]
         if crc == 0xf0b8 and not escape:
             p = bytes(out[:-2])
+            subscription = None
             if p and p[0] == 0x98:
+                if len(p)<8 or p[1:4] != b'\x01\x00\x00':
+                    continue
+                value = struct.unpack_from('<I', p, 4)[0]
+                subscription = value if value in (1, 2) else None
                 p = p[8:]
             if len(p) >= 16 and p[0] == 0x10:
-                yield p
+                yield DiagnosticPacket(p, subscription)
 
 
 class StreamFrames:
@@ -133,9 +145,6 @@ def candidate_adjustment(body):
 
 class Decoder:
     def __init__(self):
-        from pycrate_asn1dir import RRCNR
-        self.defs = RRCNR.NR_RRC_Definitions
-        self.defs._RRCReconfiguration_IEs_secondaryCellGroup._const_cont = None
         self.configs = []
         self.seen = set()
 
@@ -146,35 +155,45 @@ class Decoder:
             code = struct.unpack_from('<H', p, 6)[0]
             raw = struct.unpack_from('<Q', p, 8)[0]
             ts, body = timestamp(raw), p[16:]
-            if code == 0xb821 and len(body) >= 35 and struct.unpack_from('<I', body)[0] == 26:
-                h = struct.unpack('<BBBH Q I3sBIHBBBB', body[4:35])
-                if h[-1] or h[7] != 11 or len(body[35:]) != h[9]:
-                    continue
-                try:
-                    self.defs.RRCReconfiguration.from_uper(body[35:])
-                    outer = self.defs.RRCReconfiguration.get_val()
-                    for octets in find(outer, 'secondaryCellGroup'):
-                        self.defs.CellGroupConfig.from_uper(octets)
-                        for sync in find(self.defs.CellGroupConfig.get_val(), 'reconfigurationWithSync'):
-                            common = sync['spCellConfigCommon']
-                            scs = common['uplinkConfigCommon']['initialUplinkBWP']['genericParameters']['subcarrierSpacing']
-                            mu = {'kHz15': 0, 'kHz30': 1, 'kHz60': 2, 'kHz120': 3}.get(scs)
-                            if mu is None:
-                                continue
-                            self.configs.append(dict(ts=ts, crnti=sync['newUE-Identity'], pci=common['physCellId'],
-                                channel=next(find(common, 'absoluteFrequencySSB')),
-                                band='n'+str(next(find(common['downlinkConfigCommon'], 'frequencyBandList'))[0]),
-                                mu=mu, rrc_payload_hex=body.hex()))
-                except (ValueError, KeyError, StopIteration, TypeError):
-                    continue
+            subscription = getattr(p, 'subscription', None)
+            if code in (0xb062, 0xb063):
+                from lte_timing import initial, adjustments
+                events = initial(body) if code == 0xb062 else adjustments(body)
+                if code == 0xb062 and not events:
+                    # Preserve a real RACH event even if the provisional decoder
+                    # rejects its firmware layout or result. Never map this row.
+                    events = [dict(event_kind='lte_ta_initial_raw', payload_hex=body.hex(),
+                                   map_eligible=False, experimental=True, validated=False,
+                                   reason='Initial timing packet not accepted by candidate decoder')]
+                for i, event in enumerate(events):
+                    key = (subscription, code, i, raw)
+                    if key in self.seen:
+                        continue
+                    self.seen.add(key)
+                    event.update(ts=ts, subscription=subscription, rat='lte', modem_timestamp_raw=raw)
+                    result.append(event)
+            elif code in (0xb0c0, 0xb0c2):
+                from lte_rrc import serving_cell, ota_header
+                event = serving_cell(body) if code == 0xb0c2 else ota_header(body)
+                key = (subscription, code, raw)
+                if event is not None and key not in self.seen:
+                    self.seen.add(key)
+                    event.update(ts=ts, subscription=subscription, rat='lte', modem_timestamp_raw=raw)
+                    result.append(event)
+            elif code == 0xb821:
+                from nr_rrc import decode as decode_rrc
+                for config in decode_rrc(body, ts):
+                    config['subscription'] = subscription
+                    self.configs.append(config)
+                self.configs = [v for v in self.configs if 0 <= ts-v['ts'] <= 30]
             elif code == 0xb88a:
                 c = candidate(body)
-                if c is None or raw in self.seen:
+                if c is None or (subscription, raw) in self.seen:
                     continue
-                self.seen.add(raw)
-                matches = [v for v in self.configs if v['crnti'] == c['crnti'] and 0 <= ts-v['ts'] <= 30]
+                self.seen.add((subscription, raw))
+                matches = [v for v in self.configs if subscription is not None and v.get('subscription') == subscription and v['crnti'] == c['crnti'] and 0 <= ts-v['ts'] <= 30]
                 identities = {(v['pci'], v['channel'], v['band'], v['mu']) for v in matches}
-                row = dict(c, ts=ts, modem_timestamp_raw=raw, experimental=True, validated=False,
+                row = dict(c, ts=ts, subscription=subscription, modem_timestamp_raw=raw, experimental=True, validated=False,
                            identity_quality='Local radio signature; PCI may repeat', range_m=None,
                            reason='No unambiguous recent RRC association')
                 if len(identities) == 1:
@@ -186,14 +205,14 @@ class Decoder:
                 result.append(row)
             elif code == 0xb886:
                 c = candidate_adjustment(body)
-                if c is not None and ('adjustment', raw) not in self.seen:
-                    self.seen.add(('adjustment', raw))
-                    result.append(dict(c, ts=ts, modem_timestamp_raw=raw,
+                if c is not None and (subscription, 'adjustment', raw) not in self.seen:
+                    self.seen.add((subscription, 'adjustment', raw))
+                    result.append(dict(c, ts=ts, subscription=subscription, modem_timestamp_raw=raw,
                                        event_kind='nr_ta_adjustment'))
             self.configs = [v for v in self.configs if ts-v['ts'] <= 120][-100:]
         if len(self.seen) > 4096:
             # Retain recent modem timestamps for both record types.
-            self.seen = set(sorted(self.seen, key=lambda x:x[1] if isinstance(x, tuple) else x)[-2048:])
+            self.seen = set(sorted(self.seen, key=lambda x:x[-1] if isinstance(x, tuple) else x)[-2048:])
         return result
 
 
@@ -217,6 +236,67 @@ def locate(row, fixes, started, ended):
     return row
 
 
+def associate_range(row, radio_events, session_id, epoch):
+    """Confirm a local cell signature against event-time subscription-specific polls.
+
+    A local signature is only scoped to this session/epoch; it is not a global ID.
+    Modem packet subscription is required and never inferred from the selected SIM.
+    """
+    row = dict(row, map_eligible=False)
+    ts = row['ts']
+    radio = sorted(radio_events, key=lambda r:r['ts'])
+    before = next((r for r in reversed(radio) if r['ts']<=ts), None)
+    after = next((r for r in radio if r['ts']>=ts), None)
+    if not before or not after or after['ts']-before['ts']>3:
+        row['reason'] += '; no radio observations bracket event'
+        return row
+    prefix = row.get('rat', 'nr')
+    for r in (before, after):
+        if (row.get('subscription') not in (1, 2) or r.get('subscription') != row['subscription'] or
+                r.get('session_id') != session_id or r.get('association_epoch') != epoch or
+                any(r.get(prefix+'_'+field)!=row.get(key) or row.get(key) is None
+                    for field,key in [('band','band'),('pci','pci'),('arfcn','channel')])):
+            row['reason'] += '; subscription or cell continuity unconfirmed'
+            return row
+    plmn = before.get(prefix+'_plmn')
+    full_id = before.get(prefix+'_cell_id')
+    if not plmn or plmn != after.get(prefix+'_plmn') or full_id != after.get(prefix+'_cell_id'):
+        row['reason'] += '; operator or cell identity changed'
+        return row
+    row.update(plmn=plmn, cell_id=full_id, association_status='confirmed',
+               session_id=session_id, association_epoch=epoch,
+               identity_quality='Cell ID' if full_id else 'Session-scoped radio signature',
+               map_eligible=row.get('lat') is not None and row.get('range_m') is not None)
+    if row.get('step_m') is not None and row.get('acc_m') is not None:
+        row['quantization_m'] = row['step_m']
+        row['uncertainty_m'] = row['step_m'] + row['acc_m'] + 100
+        row['uncertainty_source'] = 'Full timing step + reported GPS accuracy + assumed 100 m model allowance; uncalibrated'
+    return row
+
+
+def candidate_areas(rows, session_id, association_epoch):
+    """Never combine ambiguous or different timing identities into a location."""
+    from mast_estimator import estimate_candidate_area
+    keys = ('session_id', 'association_epoch', 'subscription', 'rat', 'plmn',
+            'band', 'pci', 'channel')
+    groups = {}
+    for row in rows:
+        if (row.get('session_id') != session_id or
+                row.get('association_epoch') != association_epoch or
+                row.get('association_status') != 'confirmed' or
+                any(row.get(k) is None for k in keys) or
+                not row.get('map_eligible') or any(row.get(k) is None for k in ('lat', 'lon', 'range_m'))):
+            continue
+        groups.setdefault(tuple(row[k] for k in keys), []).append(row)
+    result = []
+    for key, observations in groups.items():
+        area = estimate_candidate_area(observations)
+        area.update(dict(zip(keys, key)), cell_id=observations[-1].get('cell_id'), experimental=True,
+                    cell_key='|'.join(map(str, key)))
+        result.append(area)
+    return result
+
+
 def worker(survey, stop, ssh):
     while not stop.is_set():
         if not survey.ta_enabled:
@@ -225,16 +305,19 @@ def worker(survey, stop, ssh):
             continue
         process = None
         token = uuid.uuid4().hex
+        survey.association_epoch = token
+        survey.range_areas = []
         remote = '/tmp/atlas-stream.'+token
         try:
             # Never carry associations or relative state across a transport restart.
             decoder, frames = Decoder(), StreamFrames()
+            current_epoch = survey.association_epoch
             pending = []
             total_bytes = total_candidates = total_adjustments = 0
             survey.ta_capture = None
             survey.ta_status = 'Starting continuous diagnostic stream…'
             subprocess.run(ssh + ['mkdir '+shlex.quote(remote)], capture_output=True, timeout=8, check=True)
-            for local, dest in [('nr-rach.cfg', 'mask.cfg'), ('nr-clean.cfg', 'clean.cfg'),
+            for local, dest in [('timing.cfg', 'mask.cfg'), ('nr-clean.cfg', 'clean.cfg'),
                                 ('nr_stream_aarch64', 'nr_stream')]:
                 subprocess.run(ssh + ['cat > '+shlex.quote(remote+'/'+dest)],
                     input=Path(__file__).with_name(local).read_bytes(), capture_output=True, timeout=8, check=True)
@@ -265,6 +348,11 @@ wait "$logger"
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stdout, selectors.EVENT_READ)
                     while survey.ta_enabled and not stop.is_set():
+                        if current_epoch != survey.association_epoch:
+                            # Never retain RRC/timing associations across a serving-state change.
+                            decoder = Decoder()
+                            pending = []
+                            current_epoch = survey.association_epoch
                         ready = selector.select(.25)
                         if ready:
                             block = os.read(process.stdout.fileno(), 65536)
@@ -278,11 +366,18 @@ wait "$logger"
                                 rows = decoder.decode(b'', decoded_packets) if decoded_packets else []
                                 for row in rows:
                                     row['received_ts'] = now
+                                    row.update(session_id=survey.session_id, association_epoch=current_epoch, rat=row.get('rat', 'nr'),
+                                               association_status='subscription and PLMN not yet decoded')
                                     row['delivery_ms'] = round((now-row['ts'])*1000, 1)
-                                    if row.pop('event_kind', None) == 'nr_ta_adjustment':
-                                        total_adjustments += 1
-                                        # Relative-only evidence. No guessed absolute baseline/cell.
-                                        survey.record('nr_ta_adjustment', row)
+                                    event_kind = row.pop('event_kind', None)
+                                    if event_kind in ('nr_ta_adjustment', 'lte_ta_adjustment', 'lte_ta_initial_candidate', 'lte_ta_initial_raw',
+                                                      'lte_serving_identity', 'lte_rrc_identity'):
+                                        if event_kind.endswith('_adjustment'):
+                                            total_adjustments += 1
+                                        elif event_kind == 'lte_ta_initial_candidate':
+                                            total_candidates += 1
+                                        # Preserve evidence without inventing a range association.
+                                        survey.record(event_kind, row)
                                     else:
                                         total_candidates += 1
                                         pending.append(row)
@@ -299,14 +394,17 @@ wait "$logger"
                                 survey.ta_status = 'Live timing stream · direct modem feed · experimental'
                         with survey.lock:
                             fixes = list(survey.fixes)
+                            radio_events = [e for e in survey.events if e['kind']=='radio']
                         waiting = []
                         for row in pending:
                             located = locate(row, fixes, started, row['received_ts'])
+                            located = associate_range(located, radio_events, survey.session_id, current_epoch)
                             # New events often arrive before the following GPS fix.
-                            if located['lat'] is None and time.time()-row['received_ts'] < 3:
+                            if not located['map_eligible'] and time.time()-row['received_ts'] < 3:
                                 waiting.append(row)
                             else:
                                 survey.record('nr_range', located)
+                                survey.range_areas = candidate_areas(list(survey.ranges), survey.session_id, current_epoch)
                         pending = waiting
                         if time.monotonic()-last_heartbeat > 8:
                             raise RuntimeError('Diagnostic stream heartbeat lost')
@@ -330,5 +428,8 @@ wait "$logger"
                 if process.stdout:
                     process.stdout.close()
             else:
-                subprocess.run(ssh + ['rmdir '+shlex.quote(remote)+' 2>/dev/null'],
-                               capture_output=True, timeout=6)
+                try:
+                    subprocess.run(ssh + ['rmdir '+shlex.quote(remote)+' 2>/dev/null'],
+                                   capture_output=True, timeout=6)
+                except (OSError, subprocess.SubprocessError):
+                    pass
